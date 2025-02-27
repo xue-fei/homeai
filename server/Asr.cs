@@ -1,5 +1,4 @@
 ﻿using Newtonsoft.Json;
-using System.Text;
 using SherpaOnnx;
 using Fleck;
 
@@ -22,6 +21,7 @@ namespace server
         OfflinePunctuation offlinePunctuation = null;
 
         public IWebSocketConnection client = null;
+        static float gain = 5.0f;
 
         public Asr()
         {
@@ -63,7 +63,7 @@ namespace server
         {
             client = connection;
             BaseMsg tempMsg = new BaseMsg(-1, "asr is ready");
-            client.Send(Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(tempMsg)));
+            client.Send(JsonConvert.SerializeObject(tempMsg));
             Console.WriteLine("asr is ready");
 
             while (true)
@@ -88,7 +88,7 @@ namespace server
                         if (client != null)
                         {
                             BaseMsg textMsg = new BaseMsg(0, text.ToLower());
-                            client.Send(Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(textMsg)));
+                            client.Send(JsonConvert.SerializeObject(textMsg));
                             //Console.WriteLine("text1:" + text);
                         }
                     }
@@ -98,7 +98,7 @@ namespace server
                         {
                             //client.Send(Encoding.UTF8.GetBytes(text.Replace(lastText, "")));
                             BaseMsg textMsg = new BaseMsg(0, text.Replace(lastText, "").ToLower());
-                            client.Send(Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(textMsg)));
+                            client.Send(JsonConvert.SerializeObject(textMsg));
                             lastText = text;
                         }
                     }
@@ -111,7 +111,7 @@ namespace server
                         if (client != null)
                         {
                             BaseMsg textMsg = new BaseMsg(1, offlinePunctuation.AddPunct(text.ToLower()));
-                            client.Send(Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(textMsg)));
+                            client.Send(JsonConvert.SerializeObject(textMsg));
                         }
                         //Console.WriteLine(offlinePunctuation.AddPunctuation(text));
                     }
@@ -122,10 +122,17 @@ namespace server
             }
         }
 
+        short[] int16Array;
+        float[] floatArray;
         public void Recognize(byte[] bytes)
         {
-            float[] floatArray = new float[bytes.Length / 4];
-            Buffer.BlockCopy(bytes, 0, floatArray, 0, bytes.Length);
+            int16Array = new short[bytes.Length / 2];
+            Buffer.BlockCopy(bytes, 0, int16Array, 0, bytes.Length); 
+            floatArray = new float[int16Array.Length];
+            for (int i = 0; i < int16Array.Length; i++)
+            {
+                floatArray[i] = int16Array[i] / 32768.0f * gain;
+            }
             onlineStream.AcceptWaveform(sampleRate, floatArray);
         }
 

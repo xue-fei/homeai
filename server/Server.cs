@@ -1,6 +1,5 @@
 ﻿using Fleck;
 using Newtonsoft.Json;
-using System.Text;
 
 namespace server
 {
@@ -30,7 +29,7 @@ namespace server
         private static void OnOpen(IWebSocketConnection connection)
         {
             BaseMsg textMsg = new BaseMsg(-1, "asr not ready");
-            connection.Send(Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(textMsg)));
+            connection.Send(JsonConvert.SerializeObject(textMsg));
             Console.WriteLine("asr not ready");
             Asr asr = new Asr();
             asrs.Add(connection.GetHashCode(), asr);
