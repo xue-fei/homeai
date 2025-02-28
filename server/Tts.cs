@@ -37,6 +37,7 @@ namespace server
             config.MaxNumSentences = 1;
             ot = new OfflineTts(config);
             SampleRate = ot.SampleRate;
+            Console.WriteLine("SampleRate:" + SampleRate);
             otc = new OfflineTtsCallback(OnAudioData);
             initDone = true;
         }
@@ -64,7 +65,7 @@ namespace server
         {
             tempData = new byte[n];
             Marshal.Copy(samples, tempData, 0, n);
-            if(client!=null&& client.IsAvailable)
+            if (client != null && client.IsAvailable)
             {
                 int offset = 0; // 当前发送的起始位置
                 int chunkSize = 1024; // 每次发送的字节数
