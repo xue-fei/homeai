@@ -1,5 +1,7 @@
-﻿using SherpaOnnx; 
-using System.Runtime.InteropServices; 
+﻿using Fleck;
+using Newtonsoft.Json;
+using SherpaOnnx;
+using System.Runtime.InteropServices;
 
 namespace server
 {
@@ -12,30 +14,39 @@ namespace server
         bool initDone = false;
         int SampleRate = 22050;
         string modelPath;
-        List<float> audioData = new List<float>();
-        float audioLength = 0f;
+
+        public IWebSocketConnection client = null;
 
         public Tts()
         {
             modelPath = Environment.CurrentDirectory + "/vits-melo-tts-zh_en";
             config = new OfflineTtsConfig();
-            config.Model.Vits.Model = Path.Combine(modelPath, "vits-melo-tts-zh_en/model.onnx");
-            config.Model.Vits.Lexicon = Path.Combine(modelPath, "vits-melo-tts-zh_en/lexicon.txt");
-            config.Model.Vits.Tokens = Path.Combine(modelPath, "vits-melo-tts-zh_en/tokens.txt");
-            config.Model.Vits.DictDir = Path.Combine(modelPath, "vits-melo-tts-zh_en/dict");
+            config.Model.Vits.Model = Path.Combine(modelPath, "model.onnx");
+            config.Model.Vits.Lexicon = Path.Combine(modelPath, "lexicon.txt");
+            config.Model.Vits.Tokens = Path.Combine(modelPath, "tokens.txt");
+            config.Model.Vits.DictDir = Path.Combine(modelPath, "dict");
             config.Model.Vits.NoiseScale = 0.667f;
             config.Model.Vits.NoiseScaleW = 0.8f;
             config.Model.Vits.LengthScale = 1f;
             config.Model.NumThreads = 5;
             config.Model.Debug = 1;
             config.Model.Provider = "cpu";
-            config.RuleFsts = modelPath + "/vits-melo-tts-zh_en/phone.fst" + ","
-                        + modelPath + "/vits-melo-tts-zh_en/date.fst" + ","
-                    + modelPath + "/vits-melo-tts-zh_en/number.fst";
+            config.RuleFsts = modelPath + "/phone.fst" + ","
+                        + modelPath + "/date.fst" + ","
+                    + modelPath + "/number.fst";
             config.MaxNumSentences = 1;
             ot = new OfflineTts(config);
             SampleRate = ot.SampleRate;
             otc = new OfflineTtsCallback(OnAudioData);
+            initDone = true;
+        }
+
+        public void Start(IWebSocketConnection connection)
+        {
+            client = connection;
+            BaseMsg tempMsg = new BaseMsg(-1, "tts is ready");
+            client.Send(JsonConvert.SerializeObject(tempMsg));
+            Console.WriteLine("tts is ready");
         }
 
         public void Generate(string text, float speed, int speakerId)
@@ -48,14 +59,29 @@ namespace server
             otga = ot.GenerateWithCallback(text, speed, speakerId, otc);
         }
 
+        byte[] tempData;
         int OnAudioData(IntPtr samples, int n)
         {
-            float[] tempData = new float[n];
+            tempData = new byte[n];
             Marshal.Copy(samples, tempData, 0, n);
-            audioData.AddRange(tempData);
+            if(client!=null&& client.IsAvailable)
+            {
+                int offset = 0; // 当前发送的起始位置
+                int chunkSize = 1024; // 每次发送的字节数
+
+                while (offset < n) // 循环直到所有数据发送完毕
+                {
+                    int bytesToSend = Math.Min(chunkSize, n - offset); // 计算本次发送的字节数
+
+                    // 创建一个临时数组，用于存储本次要发送的数据
+                    byte[] chunk = new byte[bytesToSend];
+                    Array.Copy(tempData, offset, chunk, 0, bytesToSend); // 复制数据到临时数组
+
+                    client.Send(chunk); // 发送数据
+                    offset += bytesToSend; // 更新偏移量
+                }
+            }
             Console.WriteLine("n:" + n);
-            audioLength += (float)n / (float)SampleRate;
-            Console.WriteLine("音频长度增加 " + (float)n / (float)SampleRate + "秒");
             return n;
         }
 

@@ -7,9 +7,10 @@ namespace server
     {
         static WebSocketServer webSocketServer = null;
         static Dictionary<int, Asr> asrs = new Dictionary<int, Asr>();
+        static Dictionary<int, Tts> ttss = new Dictionary<int, Tts>();
         public Server()
         {
-            webSocketServer = new WebSocketServer("ws://172.32.151.240:9999");
+            webSocketServer = new WebSocketServer("ws://192.168.0.164:9999");
             //webSocketServer.Certificate =
             //    new System.Security.Cryptography.X509Certificates.X509Certificate2(
             //        Environment.CurrentDirectory + "/usherpa.xuefei.net.cn.pfx", "xb5ceehg");
@@ -28,12 +29,21 @@ namespace server
 
         private static void OnOpen(IWebSocketConnection connection)
         {
-            BaseMsg textMsg = new BaseMsg(-1, "asr not ready");
-            connection.Send(JsonConvert.SerializeObject(textMsg));
+            BaseMsg textMsg2 = new BaseMsg(-1, "tts not ready");
+            connection.Send(JsonConvert.SerializeObject(textMsg2));
+            Console.WriteLine("tts not ready");
+
+            Tts tts = new Tts();
+            ttss.Add(connection.GetHashCode(), tts);
+            tts.Start(connection);
+
+            BaseMsg textMsg1 = new BaseMsg(-1, "asr not ready");
+            connection.Send(JsonConvert.SerializeObject(textMsg1));
             Console.WriteLine("asr not ready");
+
             Asr asr = new Asr();
             asrs.Add(connection.GetHashCode(), asr);
-            asr.Start(connection); 
+            asr.Start(connection,tts);
         }
 
         private static void OnBinary(IWebSocketConnection connection, byte[] bytes)

@@ -22,6 +22,7 @@ namespace server
 
         public IWebSocketConnection client = null;
         static float gain = 5.0f;
+        Tts tts;
 
         public Asr()
         {
@@ -59,8 +60,9 @@ namespace server
 
         static string text = "";
         static string lastText = "";
-        public void Start(IWebSocketConnection connection)
+        public void Start(IWebSocketConnection connection, Tts tts = null)
         {
+            this.tts = tts;
             client = connection;
             BaseMsg tempMsg = new BaseMsg(-1, "asr is ready");
             client.Send(JsonConvert.SerializeObject(tempMsg));
@@ -85,7 +87,7 @@ namespace server
                     if (string.IsNullOrWhiteSpace(lastText))
                     {
                         lastText = text;
-                        if (client != null)
+                        if (client != null && client.IsAvailable)
                         {
                             BaseMsg textMsg = new BaseMsg(0, text.ToLower());
                             client.Send(JsonConvert.SerializeObject(textMsg));
@@ -94,7 +96,7 @@ namespace server
                     }
                     else
                     {
-                        if (client != null)
+                        if (client != null && client.IsAvailable)
                         {
                             //client.Send(Encoding.UTF8.GetBytes(text.Replace(lastText, "")));
                             BaseMsg textMsg = new BaseMsg(0, text.Replace(lastText, "").ToLower());
@@ -108,10 +110,14 @@ namespace server
                 {
                     if (!string.IsNullOrWhiteSpace(text))
                     {
-                        if (client != null)
+                        if (client != null && client.IsAvailable)
                         {
                             BaseMsg textMsg = new BaseMsg(1, offlinePunctuation.AddPunct(text.ToLower()));
                             client.Send(JsonConvert.SerializeObject(textMsg));
+                            if(tts!=null)
+                            {
+                                tts.Generate(offlinePunctuation.AddPunct(text.ToLower()), 1f, 0);
+                            }
                         }
                         //Console.WriteLine(offlinePunctuation.AddPunctuation(text));
                     }
@@ -127,7 +133,7 @@ namespace server
         public void Recognize(byte[] bytes)
         {
             int16Array = new short[bytes.Length / 2];
-            Buffer.BlockCopy(bytes, 0, int16Array, 0, bytes.Length); 
+            Buffer.BlockCopy(bytes, 0, int16Array, 0, bytes.Length);
             floatArray = new float[int16Array.Length];
             for (int i = 0; i < int16Array.Length; i++)
             {

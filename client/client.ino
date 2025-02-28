@@ -65,7 +65,7 @@ void setup() {
   // Initialize I2S for audio output
   i2s_config_t i2s_config_out = {
     .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX),
-    .sample_rate = SAMPLE_RATE,
+    .sample_rate = 44100,
     .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
     .channel_format = I2S_CHANNEL_FMT_ONLY_RIGHT,
     .communication_format = (i2s_comm_format_t)(I2S_COMM_FORMAT_STAND_I2S),
@@ -128,6 +128,8 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
     case WStype_BIN:
       // 处理二进制数据
       Serial.printf("收到二进制数据，长度: %d\n", length); 
+      size_t bytes_written;
+      i2s_write(I2S_OUT_PORT, payload, length, &bytes_written, portMAX_DELAY);
       break;
 
     case WStype_ERROR:
