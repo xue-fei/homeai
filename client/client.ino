@@ -7,10 +7,16 @@ const char* ssid = "ssid";
 const char* password = "password";
 
 // WebSocket服务器配置
-const char* websocketServer = "172.32.151.240";  
+const char* websocketServer = "192.168.0.164";  
 const int websocketPort = 9999;                 
 const char* websocketPath = "/";              
  
+// I2S config for MAX98357A
+#define I2S_OUT_PORT I2S_NUM_1
+#define I2S_OUT_BCLK 15
+#define I2S_OUT_LRC 16
+#define I2S_OUT_DOUT 7
+
 // INMP441 config
 #define I2S_IN_PORT I2S_NUM_0
 #define I2S_IN_BCLK 4
@@ -49,15 +55,37 @@ void setup() {
     .dma_buf_len = 1024,
   };
 
-  i2s_pin_config_t pin_config = {
+  i2s_pin_config_t pin_config_in = {
      .bck_io_num = I2S_IN_BCLK,
     .ws_io_num = I2S_IN_LRC,
     .data_out_num = -1,
     .data_in_num = I2S_IN_DIN
   };
 
+  // Initialize I2S for audio output
+  i2s_config_t i2s_config_out = {
+    .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX),
+    .sample_rate = SAMPLE_RATE,
+    .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
+    .channel_format = I2S_CHANNEL_FMT_ONLY_RIGHT,
+    .communication_format = (i2s_comm_format_t)(I2S_COMM_FORMAT_STAND_I2S),
+    .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
+    .dma_buf_count = 8,
+    .dma_buf_len = 1024,
+  };
+   
+  i2s_pin_config_t pin_config_out = {
+    .bck_io_num = I2S_OUT_BCLK,
+    .ws_io_num = I2S_OUT_LRC,
+    .data_out_num = I2S_OUT_DOUT,
+    .data_in_num = -1
+  };
+
   i2s_driver_install(I2S_IN_PORT, &i2s_config_in, 0, NULL);
-  i2s_set_pin(I2S_IN_PORT, &pin_config);
+  i2s_set_pin(I2S_IN_PORT, &pin_config_in);
+
+   i2s_driver_install(I2S_OUT_PORT, &i2s_config_out, 0, NULL);
+  i2s_set_pin(I2S_OUT_PORT, &pin_config_out);
 
   // 连接WebSocket服务器
   webSocket.begin(websocketServer, websocketPort, websocketPath); 
