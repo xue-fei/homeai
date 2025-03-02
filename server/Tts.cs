@@ -1,7 +1,6 @@
 ﻿using Fleck;
 using Newtonsoft.Json;
 using SherpaOnnx;
-using System.Runtime.InteropServices;
 
 namespace server
 {
@@ -29,7 +28,7 @@ namespace server
             config.Model.Vits.NoiseScaleW = 0.8f;
             config.Model.Vits.LengthScale = 1f;
             config.Model.NumThreads = 5;
-            config.Model.Debug = 1;
+            config.Model.Debug = 0;
             config.Model.Provider = "cpu";
             config.RuleFsts = modelPath + "/phone.fst" + ","
                         + modelPath + "/date.fst" + ","
@@ -37,9 +36,11 @@ namespace server
             config.MaxNumSentences = 1;
             ot = new OfflineTts(config);
             SampleRate = ot.SampleRate;
-            Console.WriteLine("SampleRate:" + SampleRate);
-            otc = new OfflineTtsCallback(OnAudioData);
+            Console.WriteLine("SampleRate:" + SampleRate); 
+
             initDone = true;
+            Thread thread = new Thread(Update);
+            thread.Start();
         }
 
         public void Start(IWebSocketConnection connection)
@@ -50,6 +51,8 @@ namespace server
             Console.WriteLine("tts is ready");
         }
 
+        string fileName;
+        byte[] audiobs;
         public void Generate(string text, float speed, int speakerId)
         {
             if (!initDone)
@@ -57,33 +60,47 @@ namespace server
                 Console.WriteLine("文字转语音未完成初始化");
                 return;
             }
-            otga = ot.GenerateWithCallback(text, speed, speakerId, otc);
-        }
-
-        byte[] tempData;
-        int OnAudioData(IntPtr samples, int n)
-        {
-            tempData = new byte[n];
-            Marshal.Copy(samples, tempData, 0, n);
-            if (client != null && client.IsAvailable)
+            otga = ot.Generate(text, speed, speakerId);
+            fileName = Environment.CurrentDirectory + "/" + DateTime.Now.ToFileTime() + ".wav";
+            bool ok = otga.SaveToWaveFile(fileName);
+            if (ok)
             {
-                int offset = 0; // 当前发送的起始位置
-                int chunkSize = 1024; // 每次发送的字节数
-
-                while (offset < n) // 循环直到所有数据发送完毕
+                //Console.WriteLine("Save file succeeded!");
+                if(File.Exists(fileName))
                 {
-                    int bytesToSend = Math.Min(chunkSize, n - offset); // 计算本次发送的字节数
-
-                    // 创建一个临时数组，用于存储本次要发送的数据
-                    byte[] chunk = new byte[bytesToSend];
-                    Array.Copy(tempData, offset, chunk, 0, bytesToSend); // 复制数据到临时数组
-
-                    client.Send(chunk); // 发送数据
-                    offset += bytesToSend; // 更新偏移量
+                    audiobs = File.ReadAllBytes(fileName);
+                    for (int i = 0; i < audiobs.Length; i++)
+                    {
+                        dataQueue.Enqueue(audiobs[i]);
+                    }
                 }
             }
-            Console.WriteLine("n:" + n);
-            return n;
+            else
+            {
+                //Console.WriteLine("Failed");
+            }
+        }
+
+        Queue<byte> dataQueue = new Queue<byte>();
+        List<byte> bytes = new List<byte>();
+        public void Update()
+        {
+            while (true)
+            {
+                if (dataQueue.Count >= 4096)
+                {
+                    bytes.Clear();
+                    for (int i = 0; i < 4096; i++)
+                    {
+                        bytes.Add(dataQueue.Dequeue());
+                    }
+                    if (client != null && client.IsAvailable)
+                    {
+                        client.Send(bytes.ToArray());
+                    }
+                }
+                Thread.Sleep(1); // ms
+            }
         }
 
         public void Stop()

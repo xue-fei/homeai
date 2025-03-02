@@ -89,8 +89,8 @@ namespace server
                         lastText = text;
                         if (client != null && client.IsAvailable)
                         {
-                            BaseMsg textMsg = new BaseMsg(0, text.ToLower());
-                            client.Send(JsonConvert.SerializeObject(textMsg));
+                            //BaseMsg textMsg = new BaseMsg(0, text.ToLower());
+                            //client.Send(JsonConvert.SerializeObject(textMsg));
                             //Console.WriteLine("text1:" + text);
                         }
                     }
@@ -99,8 +99,8 @@ namespace server
                         if (client != null && client.IsAvailable)
                         {
                             //client.Send(Encoding.UTF8.GetBytes(text.Replace(lastText, "")));
-                            BaseMsg textMsg = new BaseMsg(0, text.Replace(lastText, "").ToLower());
-                            client.Send(JsonConvert.SerializeObject(textMsg));
+                            //BaseMsg textMsg = new BaseMsg(0, text.Replace(lastText, "").ToLower());
+                            //client.Send(JsonConvert.SerializeObject(textMsg));
                             lastText = text;
                         }
                     }
