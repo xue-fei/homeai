@@ -72,6 +72,9 @@ void setup() {
     .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
     .dma_buf_count = 8,
     .dma_buf_len = 1024,
+    .use_apll = false,
+    .tx_desc_auto_clear = true,
+    .fixed_mclk = 0
   };
    
   i2s_pin_config_t pin_config_out = {
@@ -84,12 +87,12 @@ void setup() {
   i2s_driver_install(I2S_IN_PORT, &i2s_config_in, 0, NULL);
   i2s_set_pin(I2S_IN_PORT, &pin_config_in);
 
-   i2s_driver_install(I2S_OUT_PORT, &i2s_config_out, 0, NULL);
+  i2s_driver_install(I2S_OUT_PORT, &i2s_config_out, 0, NULL);
   i2s_set_pin(I2S_OUT_PORT, &pin_config_out);
 
   // 连接WebSocket服务器
   webSocket.begin(websocketServer, websocketPort, websocketPath); 
-   webSocket.onEvent(webSocketEvent); 
+  webSocket.onEvent(webSocketEvent); 
 }
 
 void loop() {
@@ -130,6 +133,8 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
       Serial.printf("收到二进制数据，长度: %d\n", length); 
       size_t bytes_written;
       i2s_write(I2S_OUT_PORT, payload, length, &bytes_written, portMAX_DELAY);
+      //delay(1);
+      //i2s_zero_dma_buffer(I2S_OUT_PORT);
       break;
 
     case WStype_ERROR:
