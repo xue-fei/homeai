@@ -32,6 +32,9 @@ const char* websocketPath = "/";
 WiFiClient wifiClient;
 WebSocketsClient webSocket;
 
+#define PIN_BUTTON 47      // 开关按钮
+bool pressed = false;
+
 void setup() {
   Serial.begin(115200);
 
@@ -93,21 +96,37 @@ void setup() {
   // 连接WebSocket服务器
   webSocket.begin(websocketServer, websocketPort, websocketPath); 
   webSocket.onEvent(webSocketEvent); 
+
+  pinMode(PIN_BUTTON, INPUT_PULLUP);//开关按钮为输入开启上拉电阻
 }
 
 void loop() {
-  webSocket.loop(); // 必须调用以处理WebSocket事件
-  uint8_t buffer[BUFFER_SIZE];
-  size_t bytesRead;
-
-  // 从I2S读取音频数据
-  i2s_read(I2S_NUM_0, buffer, BUFFER_SIZE, &bytesRead, portMAX_DELAY);
-
-  // 通过WebSocket发送音频数据
-  if (webSocket.sendBIN(buffer, bytesRead)) {
-    //Serial.printf("Sent %d bytes of audio data\n", bytesRead);
-  } else {
-    //Serial.println("Failed to send audio data");
+  webSocket.loop(); // 必须调用以处理WebSocket事件 
+  if(digitalRead(PIN_BUTTON) == LOW)
+  {
+    pressed = true;
+    uint8_t buffer[BUFFER_SIZE];
+    size_t bytesRead;
+    // 从I2S读取音频数据
+    i2s_read(I2S_NUM_0, buffer, BUFFER_SIZE, &bytesRead, portMAX_DELAY);
+    // 通过WebSocket发送音频数据
+    if (webSocket.sendBIN(buffer, bytesRead)) {
+      //Serial.printf("Sent %d bytes of audio data\n", bytesRead); 
+    } else {
+      //Serial.println("Failed to send audio data");
+    }
+  }
+  else
+  {
+    if(pressed)
+    { 
+      pressed = false;
+      if (webSocket.sendTXT("{\"code\":1,\"message\":\"结束语音\"}")) {
+       
+    } else {
+       
+    }
+    }
   }
 }
 
