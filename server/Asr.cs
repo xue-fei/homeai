@@ -1,53 +1,51 @@
 ﻿using Newtonsoft.Json;
 using SherpaOnnx;
 using Fleck;
+using RNNoise.NET;
 
 namespace server
 {
     public class Asr
     {
-        OnlineRecognizer recognizer = null;
-        OnlineStream onlineStream = null;
+        OfflineRecognizer recognizer = null;
+        OfflineStream offlineStream = null;
         string tokensPath = "tokens.txt";
-        string encoder = "encoder-epoch-99-avg-1.onnx";
-        string decoder = "decoder-epoch-99-avg-1.onnx";
-        string joiner = "joiner-epoch-99-avg-1.onnx";
+        string paraformer = "model.int8.onnx";
+        string decodingMethod = "greedy_search";
         int numThreads = 1;
-        string decodingMethod = "modified_beam_search";
-
         string modelPath;
         int sampleRate = 16000;
 
         OfflinePunctuation offlinePunctuation = null;
 
         public IWebSocketConnection client = null;
-        static float gain = 5.0f;
         Tts tts;
 
         public Asr()
         {
             //需要将此文件夹拷贝到exe所在的目录
-            modelPath = Environment.CurrentDirectory + "/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20";
-            // 初始化配置
-            OnlineRecognizerConfig config = new OnlineRecognizerConfig();
+            modelPath = Environment.CurrentDirectory + "/sherpa-onnx-paraformer-zh-small-2024-03-09";
+            OfflineRecognizerConfig config = new OfflineRecognizerConfig();
             config.FeatConfig.SampleRate = sampleRate;
             config.FeatConfig.FeatureDim = 80;
-            config.ModelConfig.Transducer.Encoder = Path.Combine(modelPath, encoder);
-            config.ModelConfig.Transducer.Decoder = Path.Combine(modelPath, decoder);
-            config.ModelConfig.Transducer.Joiner = Path.Combine(modelPath, joiner);
-            config.ModelConfig.Tokens = Path.Combine(modelPath, tokensPath);
-            config.ModelConfig.Debug = 0;
             config.DecodingMethod = decodingMethod;
-            config.EnableEndpoint = 1;
-            //默认值
-            config.Rule1MinTrailingSilence = 2.4f;
-            config.Rule2MinTrailingSilence = 0.5f;
-            //限制最长说话10秒
-            config.Rule3MinUtteranceLength = 10f;
 
-            // 创建识别器和在线流
-            recognizer = new OnlineRecognizer(config);
-            onlineStream = recognizer.CreateStream();
+            OfflineModelConfig offlineModelConfig = new OfflineModelConfig();
+            offlineModelConfig.Tokens = Path.Combine(modelPath, tokensPath);
+            offlineModelConfig.NumThreads = numThreads;
+            offlineModelConfig.Provider = "cpu";
+            offlineModelConfig.Debug = 1;
+
+            OfflineParaformerModelConfig paraformerConfig = new OfflineParaformerModelConfig();
+            paraformerConfig.Model = Path.Combine(modelPath, paraformer);
+
+            offlineModelConfig.Paraformer = paraformerConfig;
+            config.ModelConfig = offlineModelConfig;
+
+            OfflineLMConfig offlineLMConfig = new OfflineLMConfig();
+            offlineLMConfig.Scale = 0.5f;
+            config.LmConfig = offlineLMConfig;
+            recognizer = new OfflineRecognizer(config);
 
             #region 添加标点符号
             OfflinePunctuationConfig opc = new OfflinePunctuationConfig();
@@ -60,12 +58,9 @@ namespace server
 
             opc.Model = opmc;
             offlinePunctuation = new OfflinePunctuation(opc);
-            #endregion
+            #endregion 
         }
 
-        static string text = "";
-        static string lastText = "";
-        static string lastEndTextwithPunct = "";
         public void Start(IWebSocketConnection connection, Tts tts = null)
         {
             this.tts = tts;
@@ -73,95 +68,65 @@ namespace server
             BaseMsg tempMsg = new BaseMsg(-1, "asr is ready");
             client.Send(JsonConvert.SerializeObject(tempMsg));
             Console.WriteLine("asr is ready");
+        }
 
-            while (true)
+        List<byte> buffer = new List<byte>();
+        public void Receive(byte[] bytes)
+        {
+            for (int i = 0; i < bytes.Length; i++)
             {
-                if (client == null || recognizer == null || onlineStream == null)
-                {
-                    break;
-                }
-                // 每帧更新识别器状态
-                if (recognizer.IsReady(onlineStream))
-                {
-                    recognizer.Decode(onlineStream);
-                }
-
-                text = recognizer.GetResult(onlineStream).Text;
-                
-                if (!string.IsNullOrWhiteSpace(text) && lastText != text)
-                {
-                    if (string.IsNullOrWhiteSpace(lastText))
-                    {
-                        lastText = text;
-                        if (client != null && client.IsAvailable)
-                        {
-                            //BaseMsg textMsg = new BaseMsg(0, text.ToLower());
-                            //client.Send(JsonConvert.SerializeObject(textMsg));
-                            Console.WriteLine("text1:" + text);
-                        }
-                    }
-                    else
-                    {
-                        if (client != null && client.IsAvailable)
-                        {
-                            //client.Send(Encoding.UTF8.GetBytes(text.Replace(lastText, "")));
-                            //BaseMsg textMsg = new BaseMsg(0, text.Replace(lastText, "").ToLower());
-                            //client.Send(JsonConvert.SerializeObject(textMsg));
-                            lastText = text;
-                            Console.WriteLine("text2:" + text);
-                        }
-                    }
-                }
-
-                bool isEndpoint = recognizer.IsEndpoint(onlineStream);
-                if (isEndpoint)
-                {
-                    Console.WriteLine("isEndpoint:" + isEndpoint + " text:" + text);
-                    if (!string.IsNullOrWhiteSpace(text))
-                    { 
-                        if (client != null && client.IsAvailable)
-                        {
-                            lastEndTextwithPunct = offlinePunctuation.AddPunct(text.ToLower());
-                            BaseMsg textMsg = new BaseMsg(1, lastEndTextwithPunct);
-                            client.Send(JsonConvert.SerializeObject(textMsg));
-                            if (tts != null)
-                            {
-                                tts.Generate(lastEndTextwithPunct, 1f, 0);
-                            }
-                        }
-                        Console.WriteLine("text3:" + text);
-                    }
-                    recognizer.Reset(onlineStream);
-                    //Console.WriteLine("Reset");
-                }
-                Thread.Sleep(200); // ms
+                buffer.Add(bytes[i]);
             }
         }
 
+        /// <summary>
+        /// 结束接收语音数据
+        /// </summary>
+        public void EndReceive()
+        {
+            File.WriteAllBytes(Environment.CurrentDirectory + "/"
+                + "test.pcm", buffer.ToArray());
+            Recognize(buffer.ToArray());
+            buffer.Clear();
+        }
+
+        /// <summary>
+        /// 识别语音数据
+        /// </summary>
         short[] int16Array;
         float[] floatArray;
-        public void Recognize(byte[] bytes)
+        private void Recognize(byte[] bytes)
         {
-            //Console.WriteLine("收到音频长度："+ bytes.Length);
             int16Array = new short[bytes.Length / 2];
             Buffer.BlockCopy(bytes, 0, int16Array, 0, bytes.Length);
             floatArray = new float[int16Array.Length];
             for (int i = 0; i < int16Array.Length; i++)
             {
-                floatArray[i] = int16Array[i] / 32768.0f * gain;
+                floatArray[i] = int16Array[i] / 32768.0f;
             }
-            onlineStream.AcceptWaveform(sampleRate, floatArray);
-        }
+            // 降噪
+            using (var denoiser = new Denoiser())
+            {
+                int count = denoiser.Denoise(floatArray.AsSpan());
+                Console.WriteLine("denoised count:" + count);
+            }
 
-        float[] af = new float[16000];
-        byte[] ab;
-        public void Reset()
-        {
-            //塞1s空白音试试
-            Array.Fill(af, 1f);
-            ab = new byte[af.Length * 4];
-            Buffer.BlockCopy(af, 0, ab, 0, ab.Length);
-            Recognize(ab);
+            offlineStream = recognizer.CreateStream();
+            offlineStream.AcceptWaveform(sampleRate, floatArray);
+            recognizer.Decode(offlineStream);
+            string result = offlineStream.Result.Text;
+            offlineStream.Dispose();
+            Console.WriteLine("result:" + result);
+            if (!string.IsNullOrWhiteSpace(result))
+            {
+                result = offlinePunctuation.AddPunct(result.ToLower());
+                BaseMsg textMsg = new BaseMsg(1, result);
+                client.Send(JsonConvert.SerializeObject(textMsg));
+                if (tts != null)
+                {
+                    tts.Generate(result, 1f, 0);
+                }
+            }
         }
 
         public void Stop()
@@ -169,8 +134,8 @@ namespace server
             client = null;
             recognizer.Dispose();
             recognizer = null;
-            onlineStream.Dispose();
-            onlineStream = null;
+            offlineStream.Dispose();
+            offlineStream = null;
             offlinePunctuation.Dispose();
             offlinePunctuation = null;
         }

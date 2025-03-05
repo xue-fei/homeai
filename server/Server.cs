@@ -10,7 +10,7 @@ namespace server
         static Dictionary<int, Tts> ttss = new Dictionary<int, Tts>();
         public Server()
         {
-            webSocketServer = new WebSocketServer("ws://192.168.0.164:9999");
+            webSocketServer = new WebSocketServer("ws://172.32.151.240:9999");
             //webSocketServer.Certificate =
             //    new System.Security.Cryptography.X509Certificates.X509Certificate2(
             //        Environment.CurrentDirectory + "/usherpa.xuefei.net.cn.pfx", "xb5ceehg");
@@ -26,7 +26,6 @@ namespace server
             connection.OnBinary = bytes => OnBinary(connection, bytes);
             connection.OnMessage = msg => OnMessage(connection, msg);
             connection.OnClose += () => OnClose(connection);
-            
         }
 
         private static void OnOpen(IWebSocketConnection connection)
@@ -54,31 +53,31 @@ namespace server
             asrs.TryGetValue(connection.GetHashCode(), out asr);
             if (asr != null)
             {
-                asr.Recognize(bytes);
+                asr.Receive(bytes);
             }
         }
 
         private static void OnMessage(IWebSocketConnection connection, string msg)
         {
-            //Console.WriteLine("msg:"+ msg);
             BaseMsg baseMsg = null;
             try
             {
-                JsonConvert.DeserializeObject<BaseMsg>(msg);
+                baseMsg = JsonConvert.DeserializeObject<BaseMsg>(msg);
             }
-            catch(Exception e)
+            catch (Exception e)
             {
-
+                Console.WriteLine(e);
             }
-            if(baseMsg != null)
+            if (baseMsg != null)
             {
-                if(baseMsg.code == 1)
+                // 收到code 1时，结束录音开始识别
+                if (baseMsg.code == 1)
                 {
                     Asr asr = null;
                     asrs.TryGetValue(connection.GetHashCode(), out asr);
                     if (asr != null)
                     {
-                        asr.Reset();
+                        asr.EndReceive();
                     }
                 }
             }

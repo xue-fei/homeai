@@ -98,10 +98,10 @@ namespace server
         {
             while (true)
             {
-                if (dataQueue.Count >= 4096)
+                if (dataQueue.Count >= 1024)
                 {
                     bytes.Clear();
-                    for (int i = 0; i < 4096; i++)
+                    for (int i = 0; i < 1024; i++)
                     {
                         bytes.Add(dataQueue.Dequeue());
                     }
