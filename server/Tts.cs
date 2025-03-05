@@ -36,8 +36,8 @@ namespace server
             config.MaxNumSentences = 1;
             ot = new OfflineTts(config);
             SampleRate = ot.SampleRate;
-            Console.WriteLine("SampleRate:" + SampleRate); 
-            if(!Directory.Exists(Environment.CurrentDirectory+"/audio"))
+            Console.WriteLine("SampleRate:" + SampleRate);
+            if (!Directory.Exists(Environment.CurrentDirectory + "/audio"))
             {
                 Directory.CreateDirectory(Environment.CurrentDirectory + "/audio");
             }
@@ -53,7 +53,7 @@ namespace server
             client.Send(JsonConvert.SerializeObject(tempMsg));
             Console.WriteLine("tts is ready");
         }
-          
+
         public void Generate(string text, float speed, int speakerId)
         {
             if (!initDone)
@@ -67,11 +67,14 @@ namespace server
             if (ok)
             {
                 //Console.WriteLine("Save file succeeded!");
-                if(File.Exists(fileName))
+                if (File.Exists(fileName))
                 {
-                    try
-                    {
-                        byte[] audiobs = File.ReadAllBytes(fileName);
+                    //try
+                    //{
+                        FileStream fs = new FileStream(fileName, FileMode.Open, FileAccess.Read);
+                        byte[] audiobs = new byte[fs.Length];
+                        fs.Read(audiobs, 0, audiobs.Length);
+                        fs.Close();
                         if (audiobs != null && audiobs.Length > 0)
                         {
                             for (int i = 0; i < audiobs.Length; i++)
@@ -79,12 +82,13 @@ namespace server
                                 dataQueue.Enqueue(audiobs[i]);
                             }
                         }
-                    }
-                    catch(Exception e)
-                    {
-                        Console.WriteLine(e);
-                    }
-                }
+                        
+                    //}
+                    //catch (Exception e)
+                    //{
+                    //    Console.WriteLine(e);
+                    //}
+                }  
             }
             else
             {
@@ -98,10 +102,10 @@ namespace server
         {
             while (true)
             {
-                if (dataQueue.Count >= 1024)
+                if (dataQueue.Count >= 4096)
                 {
                     bytes.Clear();
-                    for (int i = 0; i < 1024; i++)
+                    for (int i = 0; i < 4096; i++)
                     {
                         bytes.Add(dataQueue.Dequeue());
                     }
@@ -113,7 +117,7 @@ namespace server
                 }
                 else
                 {
-                    if(dataQueue.Count>0)
+                    if (dataQueue.Count > 0)
                     {
                         bytes.Clear();
                         for (int i = 0; i < dataQueue.Count; i++)

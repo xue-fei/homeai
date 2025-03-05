@@ -8,6 +8,7 @@ namespace server
         static WebSocketServer webSocketServer = null;
         static Dictionary<int, Asr> asrs = new Dictionary<int, Asr>();
         static Dictionary<int, Tts> ttss = new Dictionary<int, Tts>();
+
         public Server()
         {
             webSocketServer = new WebSocketServer("ws://172.32.151.240:9999");

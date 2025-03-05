@@ -19,7 +19,7 @@ namespace server
         OfflinePunctuation offlinePunctuation = null;
 
         public IWebSocketConnection client = null;
-        Tts tts;
+        Llm llm; 
 
         public Asr()
         {
@@ -62,8 +62,9 @@ namespace server
         }
 
         public void Start(IWebSocketConnection connection, Tts tts = null)
-        {
-            this.tts = tts;
+        { 
+            llm = new Llm();
+            llm.Start(tts);
             client = connection;
             BaseMsg tempMsg = new BaseMsg(-1, "asr is ready");
             client.Send(JsonConvert.SerializeObject(tempMsg));
@@ -84,8 +85,8 @@ namespace server
         /// </summary>
         public void EndReceive()
         {
-            File.WriteAllBytes(Environment.CurrentDirectory + "/"
-                + "test.pcm", buffer.ToArray());
+            //File.WriteAllBytes(Environment.CurrentDirectory + "/"
+            //    + "test.pcm", buffer.ToArray());
             Recognize(buffer.ToArray());
             buffer.Clear();
         }
@@ -122,9 +123,9 @@ namespace server
                 result = offlinePunctuation.AddPunct(result.ToLower());
                 BaseMsg textMsg = new BaseMsg(1, result);
                 client.Send(JsonConvert.SerializeObject(textMsg));
-                if (tts != null)
+                if (llm != null)
                 {
-                    tts.Generate(result, 1f, 0);
+                    llm.RequestAsync(result);
                 }
             }
         }
