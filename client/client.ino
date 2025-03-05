@@ -139,7 +139,7 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
     case WStype_CONNECTED:
       Serial.printf("已连接到服务器: %s\n", payload);
       // 连接成功后发送测试消息（可选）
-      webSocket.sendTXT("ESP32-S3已连接");
+      webSocket.sendTXT("{\"code\":-1,\"message\":\"esp32s3已连接\"}");
       break;
 
     case WStype_TEXT:
