@@ -37,7 +37,10 @@ namespace server
             ot = new OfflineTts(config);
             SampleRate = ot.SampleRate;
             Console.WriteLine("SampleRate:" + SampleRate); 
-
+            if(!Directory.Exists(Environment.CurrentDirectory+"/audio"))
+            {
+                Directory.CreateDirectory(Environment.CurrentDirectory + "/audio");
+            }
             initDone = true;
             Thread thread = new Thread(Update);
             thread.Start();
@@ -50,9 +53,7 @@ namespace server
             client.Send(JsonConvert.SerializeObject(tempMsg));
             Console.WriteLine("tts is ready");
         }
-
-        string fileName;
-        byte[] audiobs;
+          
         public void Generate(string text, float speed, int speakerId)
         {
             if (!initDone)
@@ -61,17 +62,27 @@ namespace server
                 return;
             }
             otga = ot.Generate(text, speed, speakerId);
-            fileName = Environment.CurrentDirectory + "/" + DateTime.Now.ToFileTime() + ".wav";
+            string fileName = Environment.CurrentDirectory + "/audio/" + DateTime.Now.ToFileTime() + ".wav";
             bool ok = otga.SaveToWaveFile(fileName);
             if (ok)
             {
                 //Console.WriteLine("Save file succeeded!");
                 if(File.Exists(fileName))
                 {
-                    audiobs = File.ReadAllBytes(fileName);
-                    for (int i = 0; i < audiobs.Length; i++)
+                    try
                     {
-                        dataQueue.Enqueue(audiobs[i]);
+                        byte[] audiobs = File.ReadAllBytes(fileName);
+                        if (audiobs != null && audiobs.Length > 0)
+                        {
+                            for (int i = 0; i < audiobs.Length; i++)
+                            {
+                                dataQueue.Enqueue(audiobs[i]);
+                            }
+                        }
+                    }
+                    catch(Exception e)
+                    {
+                        Console.WriteLine(e);
                     }
                 }
             }
@@ -97,6 +108,23 @@ namespace server
                     if (client != null && client.IsAvailable)
                     {
                         client.Send(bytes.ToArray());
+                    }
+                    bytes.Clear();
+                }
+                else
+                {
+                    if(dataQueue.Count>0)
+                    {
+                        bytes.Clear();
+                        for (int i = 0; i < dataQueue.Count; i++)
+                        {
+                            bytes.Add(dataQueue.Dequeue());
+                        }
+                        if (client != null && client.IsAvailable)
+                        {
+                            client.Send(bytes.ToArray());
+                        }
+                        bytes.Clear();
                     }
                 }
                 Thread.Sleep(1); // ms

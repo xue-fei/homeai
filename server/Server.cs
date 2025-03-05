@@ -24,7 +24,9 @@ namespace server
         {
             connection.OnOpen += () => OnOpen(connection);
             connection.OnBinary = bytes => OnBinary(connection, bytes);
+            connection.OnMessage = msg => OnMessage(connection, msg);
             connection.OnClose += () => OnClose(connection);
+            
         }
 
         private static void OnOpen(IWebSocketConnection connection)
@@ -43,7 +45,7 @@ namespace server
 
             Asr asr = new Asr();
             asrs.Add(connection.GetHashCode(), asr);
-            asr.Start(connection,tts);
+            asr.Start(connection, tts);
         }
 
         private static void OnBinary(IWebSocketConnection connection, byte[] bytes)
@@ -53,6 +55,32 @@ namespace server
             if (asr != null)
             {
                 asr.Recognize(bytes);
+            }
+        }
+
+        private static void OnMessage(IWebSocketConnection connection, string msg)
+        {
+            //Console.WriteLine("msg:"+ msg);
+            BaseMsg baseMsg = null;
+            try
+            {
+                JsonConvert.DeserializeObject<BaseMsg>(msg);
+            }
+            catch(Exception e)
+            {
+
+            }
+            if(baseMsg != null)
+            {
+                if(baseMsg.code == 1)
+                {
+                    Asr asr = null;
+                    asrs.TryGetValue(connection.GetHashCode(), out asr);
+                    if (asr != null)
+                    {
+                        asr.Reset();
+                    }
+                }
             }
         }
 

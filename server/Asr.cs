@@ -39,6 +39,11 @@ namespace server
             config.ModelConfig.Debug = 0;
             config.DecodingMethod = decodingMethod;
             config.EnableEndpoint = 1;
+            //默认值
+            config.Rule1MinTrailingSilence = 2.4f;
+            config.Rule2MinTrailingSilence = 0.5f;
+            //限制最长说话10秒
+            config.Rule3MinUtteranceLength = 10f;
 
             // 创建识别器和在线流
             recognizer = new OnlineRecognizer(config);
@@ -60,6 +65,7 @@ namespace server
 
         static string text = "";
         static string lastText = "";
+        static string lastEndTextwithPunct = "";
         public void Start(IWebSocketConnection connection, Tts tts = null)
         {
             this.tts = tts;
@@ -81,7 +87,7 @@ namespace server
                 }
 
                 text = recognizer.GetResult(onlineStream).Text;
-                bool isEndpoint = recognizer.IsEndpoint(onlineStream);
+                
                 if (!string.IsNullOrWhiteSpace(text) && lastText != text)
                 {
                     if (string.IsNullOrWhiteSpace(lastText))
@@ -91,7 +97,7 @@ namespace server
                         {
                             //BaseMsg textMsg = new BaseMsg(0, text.ToLower());
                             //client.Send(JsonConvert.SerializeObject(textMsg));
-                            //Console.WriteLine("text1:" + text);
+                            Console.WriteLine("text1:" + text);
                         }
                     }
                     else
@@ -102,24 +108,28 @@ namespace server
                             //BaseMsg textMsg = new BaseMsg(0, text.Replace(lastText, "").ToLower());
                             //client.Send(JsonConvert.SerializeObject(textMsg));
                             lastText = text;
+                            Console.WriteLine("text2:" + text);
                         }
                     }
                 }
 
+                bool isEndpoint = recognizer.IsEndpoint(onlineStream);
                 if (isEndpoint)
                 {
+                    Console.WriteLine("isEndpoint:" + isEndpoint + " text:" + text);
                     if (!string.IsNullOrWhiteSpace(text))
-                    {
+                    { 
                         if (client != null && client.IsAvailable)
                         {
-                            BaseMsg textMsg = new BaseMsg(1, offlinePunctuation.AddPunct(text.ToLower()));
+                            lastEndTextwithPunct = offlinePunctuation.AddPunct(text.ToLower());
+                            BaseMsg textMsg = new BaseMsg(1, lastEndTextwithPunct);
                             client.Send(JsonConvert.SerializeObject(textMsg));
-                            if(tts!=null)
+                            if (tts != null)
                             {
-                                tts.Generate(offlinePunctuation.AddPunct(text.ToLower()), 1f, 0);
+                                tts.Generate(lastEndTextwithPunct, 1f, 0);
                             }
                         }
-                        //Console.WriteLine(offlinePunctuation.AddPunctuation(text));
+                        Console.WriteLine("text3:" + text);
                     }
                     recognizer.Reset(onlineStream);
                     //Console.WriteLine("Reset");
@@ -132,6 +142,7 @@ namespace server
         float[] floatArray;
         public void Recognize(byte[] bytes)
         {
+            //Console.WriteLine("收到音频长度："+ bytes.Length);
             int16Array = new short[bytes.Length / 2];
             Buffer.BlockCopy(bytes, 0, int16Array, 0, bytes.Length);
             floatArray = new float[int16Array.Length];
@@ -140,6 +151,17 @@ namespace server
                 floatArray[i] = int16Array[i] / 32768.0f * gain;
             }
             onlineStream.AcceptWaveform(sampleRate, floatArray);
+        }
+
+        float[] af = new float[16000];
+        byte[] ab;
+        public void Reset()
+        {
+            //塞1s空白音试试
+            Array.Fill(af, 1f);
+            ab = new byte[af.Length * 4];
+            Buffer.BlockCopy(af, 0, ab, 0, ab.Length);
+            Recognize(ab);
         }
 
         public void Stop()
