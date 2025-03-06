@@ -15,5 +15,3 @@ https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-melo-tts
 client  
 WebSockets   
 https://github.com/Links2004/arduinoWebSockets  
-audioI2S   
-https://github.com/schreibfaul1/ESP32-audioI2S  
