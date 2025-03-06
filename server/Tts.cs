@@ -69,26 +69,44 @@ namespace server
                 //Console.WriteLine("Save file succeeded!");
                 if (File.Exists(fileName))
                 {
-                    //try
-                    //{
-                        FileStream fs = new FileStream(fileName, FileMode.Open, FileAccess.Read);
-                        byte[] audiobs = new byte[fs.Length];
-                        fs.Read(audiobs, 0, audiobs.Length);
-                        fs.Close();
-                        if (audiobs != null && audiobs.Length > 0)
+                    try
+                    {
+                        using (FileStream fs = new FileStream(fileName, FileMode.Open, FileAccess.Read))
                         {
-                            for (int i = 0; i < audiobs.Length; i++)
+                            byte[] audiobs = new byte[fs.Length];
+
+                            // 安全读取全部数据
+                            int totalBytesRead = 0;
+                            while (totalBytesRead < audiobs.Length)
                             {
-                                dataQueue.Enqueue(audiobs[i]);
+                                int bytesRead = fs.Read(audiobs, totalBytesRead, audiobs.Length - totalBytesRead);
+                                if (bytesRead == 0)
+                                {
+                                    break; // 流结束
+                                }
+                                totalBytesRead += bytesRead;
+                            }
+
+                            // 验证实际读取长度
+                            if (totalBytesRead > 0)
+                            {
+                                // 使用Buffer.BlockCopy优化入队
+                                byte[] validData = new byte[totalBytesRead];
+                                Buffer.BlockCopy(audiobs, 0, validData, 0, totalBytesRead);
+
+                                foreach (byte b in validData)
+                                {
+                                    dataQueue.Enqueue(b);
+                                }
                             }
                         }
-                        
-                    //}
-                    //catch (Exception e)
-                    //{
-                    //    Console.WriteLine(e);
-                    //}
-                }  
+
+                    }
+                    catch (Exception e)
+                    {
+                        Console.WriteLine(e);
+                    }
+                }
             }
             else
             {
@@ -96,42 +114,37 @@ namespace server
             }
         }
 
-        Queue<byte> dataQueue = new Queue<byte>();
-        List<byte> bytes = new List<byte>();
+        private Queue<byte> dataQueue = new Queue<byte>();
+        private readonly object queueLock = new object();
+
         public void Update()
         {
             while (true)
             {
-                if (dataQueue.Count >= 4096)
+                List<byte> bytesToSend = new List<byte>();
+                lock (queueLock)
                 {
-                    bytes.Clear();
-                    for (int i = 0; i < 4096; i++)
+                    if (dataQueue.Count >= 2048)
                     {
-                        bytes.Add(dataQueue.Dequeue());
-                    }
-                    if (client != null && client.IsAvailable)
-                    {
-                        client.Send(bytes.ToArray());
-                    }
-                    bytes.Clear();
-                }
-                else
-                {
-                    if (dataQueue.Count > 0)
-                    {
-                        bytes.Clear();
-                        for (int i = 0; i < dataQueue.Count; i++)
+                        for (int i = 0; i < 2048; i++)
                         {
-                            bytes.Add(dataQueue.Dequeue());
+                            bytesToSend.Add(dataQueue.Dequeue());
                         }
-                        if (client != null && client.IsAvailable)
+                    }
+                    else if (dataQueue.Count > 0)
+                    {
+                        int count = dataQueue.Count;
+                        for (int i = 0; i < count; i++)
                         {
-                            client.Send(bytes.ToArray());
+                            bytesToSend.Add(dataQueue.Dequeue());
                         }
-                        bytes.Clear();
                     }
                 }
-                Thread.Sleep(1); // ms
+                if (bytesToSend.Count > 0 && client != null && client.IsAvailable)
+                {
+                    client.Send(bytesToSend.ToArray());
+                }
+                Thread.Sleep(10);
             }
         }
 

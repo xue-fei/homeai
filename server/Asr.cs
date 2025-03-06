@@ -34,7 +34,7 @@ namespace server
             offlineModelConfig.Tokens = Path.Combine(modelPath, tokensPath);
             offlineModelConfig.NumThreads = numThreads;
             offlineModelConfig.Provider = "cpu";
-            offlineModelConfig.Debug = 1;
+            offlineModelConfig.Debug = 0;
 
             OfflineParaformerModelConfig paraformerConfig = new OfflineParaformerModelConfig();
             paraformerConfig.Model = Path.Combine(modelPath, paraformer);
