@@ -1,6 +1,7 @@
 ﻿using Fleck;
 using Newtonsoft.Json;
 using SherpaOnnx;
+using System.Runtime.InteropServices;
 
 namespace server
 {
@@ -35,6 +36,7 @@ namespace server
                     + modelPath + "/number.fst";
             config.MaxNumSentences = 1;
             ot = new OfflineTts(config);
+            otc = new OfflineTtsCallback(OnAudioData);
             SampleRate = ot.SampleRate;
             Console.WriteLine("SampleRate:" + SampleRate);
             if (!Directory.Exists(Environment.CurrentDirectory + "/audio"))
@@ -61,57 +63,25 @@ namespace server
                 Console.WriteLine("文字转语音未完成初始化");
                 return;
             }
-            otga = ot.Generate(text, speed, speakerId);
-            string fileName = Environment.CurrentDirectory + "/audio/" + DateTime.Now.ToFileTime() + ".wav";
-            bool ok = otga.SaveToWaveFile(fileName);
-            if (ok)
+            otga = ot.GenerateWithCallback(text, speed, speakerId, otc);
+        }
+
+        private int OnAudioData(nint samples, int n)
+        {
+            float[] floatData = new float[n];
+            Marshal.Copy(samples, floatData, 0, n);
+            short[] shortData = new short[n];
+            for (int i = 0; i < n; i++)
             {
-                //Console.WriteLine("Save file succeeded!");
-                if (File.Exists(fileName))
-                {
-                    try
-                    {
-                        using (FileStream fs = new FileStream(fileName, FileMode.Open, FileAccess.Read))
-                        {
-                            byte[] audiobs = new byte[fs.Length];
-
-                            // 安全读取全部数据
-                            int totalBytesRead = 0;
-                            while (totalBytesRead < audiobs.Length)
-                            {
-                                int bytesRead = fs.Read(audiobs, totalBytesRead, audiobs.Length - totalBytesRead);
-                                if (bytesRead == 0)
-                                {
-                                    break; // 流结束
-                                }
-                                totalBytesRead += bytesRead;
-                            }
-
-                            // 验证实际读取长度
-                            if (totalBytesRead > 0)
-                            {
-                                // 使用Buffer.BlockCopy优化入队
-                                byte[] validData = new byte[totalBytesRead];
-                                Buffer.BlockCopy(audiobs, 0, validData, 0, totalBytesRead);
-
-                                foreach (byte b in validData)
-                                {
-                                    dataQueue.Enqueue(b);
-                                }
-                            }
-                        }
-
-                    }
-                    catch (Exception e)
-                    {
-                        Console.WriteLine(e);
-                    }
-                }
+                shortData[i] = (short)(floatData[i] * 32768f);
             }
-            else
+            byte[] byteData = new byte[n * 2];
+            Buffer.BlockCopy(shortData, 0, byteData, 0, byteData.Length);
+            foreach (byte b in byteData)
             {
-                //Console.WriteLine("Failed");
+                dataQueue.Enqueue(b);
             }
+            return n;
         }
 
         private Queue<byte> dataQueue = new Queue<byte>();
