@@ -7,10 +7,10 @@ const char* ssid = "ssid";
 const char* password = "password";
 
 // WebSocket服务器配置
-const char* websocketServer = "192.168.0.164";  
-const int websocketPort = 9999;                 
-const char* websocketPath = "/";              
- 
+const char* websocketServer = "172.32.151.240";
+const int websocketPort = 9999;
+const char* websocketPath = "/";
+
 // I2S config for MAX98357A
 #define I2S_OUT_PORT I2S_NUM_1
 #define I2S_OUT_BCLK 15
@@ -23,7 +23,7 @@ const char* websocketPath = "/";
 #define I2S_IN_LRC 5
 #define I2S_IN_DIN 6
 
-// I2S配置
+// 录音参数配置
 #define SAMPLE_RATE 16000
 #define SAMPLE_BITS 16
 #define BUFFER_SIZE 1024
@@ -31,8 +31,8 @@ const char* websocketPath = "/";
 // WebSocket客户端
 WiFiClient wifiClient;
 WebSocketsClient webSocket;
-
-#define PIN_BUTTON 47      // 开关按钮
+// 开关按钮
+#define PIN_BUTTON 47  
 bool pressed = false;
 
 void setup() {
@@ -45,7 +45,7 @@ void setup() {
     Serial.print(".");
   }
   Serial.println("WiFi connected");
- 
+
   // Initialize I2S for audio input
   i2s_config_t i2s_config_in = {
     .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX),
@@ -59,7 +59,7 @@ void setup() {
   };
 
   i2s_pin_config_t pin_config_in = {
-     .bck_io_num = I2S_IN_BCLK,
+    .bck_io_num = I2S_IN_BCLK,
     .ws_io_num = I2S_IN_LRC,
     .data_out_num = -1,
     .data_in_num = I2S_IN_DIN
@@ -79,7 +79,7 @@ void setup() {
     .tx_desc_auto_clear = true,
     .fixed_mclk = 0
   };
-   
+
   i2s_pin_config_t pin_config_out = {
     .bck_io_num = I2S_OUT_BCLK,
     .ws_io_num = I2S_OUT_LRC,
@@ -94,16 +94,15 @@ void setup() {
   i2s_set_pin(I2S_OUT_PORT, &pin_config_out);
 
   // 连接WebSocket服务器
-  webSocket.begin(websocketServer, websocketPort, websocketPath); 
-  webSocket.onEvent(webSocketEvent); 
-
-  pinMode(PIN_BUTTON, INPUT_PULLUP);//开关按钮为输入开启上拉电阻
+  webSocket.begin(websocketServer, websocketPort, websocketPath);
+  webSocket.onEvent(webSocketEvent);
+  //开关按钮为输入开启上拉电阻
+  pinMode(PIN_BUTTON, INPUT_PULLUP);  
 }
 
 void loop() {
-  webSocket.loop(); // 必须调用以处理WebSocket事件 
-  if(digitalRead(PIN_BUTTON) == LOW)
-  {
+  webSocket.loop();  // 必须调用以处理WebSocket事件
+  if (digitalRead(PIN_BUTTON) == LOW) {
     pressed = true;
     uint8_t buffer[BUFFER_SIZE];
     size_t bytesRead;
@@ -111,21 +110,16 @@ void loop() {
     i2s_read(I2S_NUM_0, buffer, BUFFER_SIZE, &bytesRead, portMAX_DELAY);
     // 通过WebSocket发送音频数据
     if (webSocket.sendBIN(buffer, bytesRead)) {
-      //Serial.printf("Sent %d bytes of audio data\n", bytesRead); 
+      //Serial.printf("Sent %d bytes of audio data\n", bytesRead);
     } else {
       //Serial.println("Failed to send audio data");
     }
-  }
-  else
-  {
-    if(pressed)
-    { 
+  } else {
+    if (pressed) {
       pressed = false;
       if (webSocket.sendTXT("{\"code\":1,\"message\":\"结束语音\"}")) {
-       
-    } else {
-       
-    }
+      } else {
+      }
     }
   }
 }
@@ -140,16 +134,18 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
       Serial.printf("已连接到服务器: %s\n", payload);
       // 连接成功后发送测试消息（可选）
       webSocket.sendTXT("{\"code\":-1,\"message\":\"esp32s3已连接\"}");
+      // 打印本地IP地址
+      Serial.println(WiFi.localIP());
       break;
 
     case WStype_TEXT:
       // 处理文本数据
-      Serial.printf("收到文本消息: %s\n", payload); 
+      Serial.printf("收到文本消息: %s\n", payload);
       break;
 
     case WStype_BIN:
       // 处理二进制数据
-      Serial.printf("收到二进制数据，长度: %d\n", length); 
+      //Serial.printf("收到二进制数据，长度: %d\n", length);
       size_t bytes_written;
       i2s_write(I2S_OUT_PORT, payload, length, &bytes_written, portMAX_DELAY);
       //delay(1);
