@@ -27,7 +27,7 @@ namespace server
             config.ModelConfig.Tokens = Path.Combine(modelPath, "tokens.txt");
             config.ModelConfig.Provider = "cpu";
             config.ModelConfig.NumThreads = 1;
-            config.ModelConfig.Debug = 1;
+            config.ModelConfig.Debug = 0;
             config.KeywordsFile = Path.Combine(modelPath, "keywords.txt");
             keywordSpotter = new KeywordSpotter(config);
             onlineStream = keywordSpotter.CreateStream();
