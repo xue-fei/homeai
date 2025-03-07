@@ -94,9 +94,9 @@ namespace server
                 List<byte> bytesToSend = new List<byte>();
                 lock (queueLock)
                 {
-                    if (dataQueue.Count >= 2048)
+                    if (dataQueue.Count >= 1536)
                     {
-                        for (int i = 0; i < 2048; i++)
+                        for (int i = 0; i < 1536; i++)
                         {
                             bytesToSend.Add(dataQueue.Dequeue());
                         }
