@@ -19,6 +19,7 @@ namespace server
         OfflinePunctuation offlinePunctuation = null;
 
         public IWebSocketConnection client = null;
+        Keyword keyword;
         Llm llm; 
 
         public Asr()
@@ -62,7 +63,8 @@ namespace server
         }
 
         public void Start(IWebSocketConnection connection, Tts tts = null)
-        { 
+        {
+            keyword = new Keyword();
             llm = new Llm();
             llm.Start(tts);
             client = connection;
@@ -111,6 +113,8 @@ namespace server
                 int count = denoiser.Denoise(floatArray.AsSpan());
                 Console.WriteLine("denoised count:" + count);
             }
+
+            keyword.Recognize(floatArray);
 
             offlineStream = recognizer.CreateStream();
             offlineStream.AcceptWaveform(sampleRate, floatArray);
