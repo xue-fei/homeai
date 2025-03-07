@@ -73,41 +73,46 @@ namespace server
             short[] shortData = new short[n];
             for (int i = 0; i < n; i++)
             {
-                shortData[i] = (short)(floatData[i] * 32768f);
+                shortData[i] = Math.Clamp((short)(floatData[i] * 32768f), short.MinValue, short.MaxValue);
             }
-            byte[] byteData = new byte[n * 2];
-            Buffer.BlockCopy(shortData, 0, byteData, 0, byteData.Length);
-            foreach (byte b in byteData)
+            Task task = new Task(() =>
             {
-                dataQueue.Enqueue(b);
-            }
+                HandleFloatData(shortData);
+            });
+            task.Start();
             return n;
         }
 
-        private Queue<byte> dataQueue = new Queue<byte>();
-        private readonly object queueLock = new object();
+        void HandleFloatData(short[] shortData)
+        {
+            byte[] byteData = new byte[shortData.Length * 2];
+            Buffer.BlockCopy(shortData, 0, byteData, 0, byteData.Length);
+            foreach (byte b in byteData)
+            {
+                sendQueue.Enqueue(b);
+            }
+        }
+
+        private Queue<byte> sendQueue = new Queue<byte>();
 
         public void Update()
         {
             while (true)
             {
                 List<byte> bytesToSend = new List<byte>();
-                lock (queueLock)
+                if (sendQueue.Count >= 1536)
                 {
-                    if (dataQueue.Count >= 1536)
+                    for (int i = 0; i < 1536; i++)
                     {
-                        for (int i = 0; i < 1536; i++)
-                        {
-                            bytesToSend.Add(dataQueue.Dequeue());
-                        }
+                        bytesToSend.Add(sendQueue.Dequeue());
                     }
-                    else if (dataQueue.Count > 0)
+                }
+                else if (sendQueue.Count > 0)
+                {
+                    int count = sendQueue.Count;
+                    for (int i = 0; i < count; i++)
                     {
-                        int count = dataQueue.Count;
-                        for (int i = 0; i < count; i++)
-                        {
-                            bytesToSend.Add(dataQueue.Dequeue());
-                        }
+                        bytesToSend.Add(sendQueue.Dequeue());
                     }
                 }
                 if (bytesToSend.Count > 0 && client != null && client.IsAvailable)
