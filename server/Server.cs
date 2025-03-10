@@ -71,8 +71,18 @@ namespace server
             }
             if (baseMsg != null)
             {
-                // 收到code 1时，结束录音开始识别
+                // 收到code 1时，开始录音
                 if (baseMsg.code == 1)
+                {
+                    Tts tts = null;
+                    ttss.TryGetValue(connection.GetHashCode(), out tts);
+                    if (tts != null)
+                    {
+                        tts.Interrupt();
+                    }
+                }
+                // 收到code 2时，开始识别
+                if (baseMsg.code == 2)
                 {
                     Asr asr = null;
                     asrs.TryGetValue(connection.GetHashCode(), out asr);

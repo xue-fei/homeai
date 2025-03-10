@@ -103,7 +103,13 @@ void setup() {
 void loop() {
   webSocket.loop();  // 必须调用以处理WebSocket事件
   if (digitalRead(PIN_BUTTON) == LOW) {
-    pressed = true;
+    if(!pressed){
+      pressed = true; 
+      if (webSocket.sendTXT("{\"code\":1,\"message\":\"开始语音\"}")) {
+      } else {
+      }
+      i2s_zero_dma_buffer(I2S_OUT_PORT);
+    }
     uint8_t buffer[BUFFER_SIZE];
     size_t bytesRead;
     // 从I2S读取音频数据
@@ -117,7 +123,7 @@ void loop() {
   } else {
     if (pressed) {
       pressed = false;
-      if (webSocket.sendTXT("{\"code\":1,\"message\":\"结束语音\"}")) {
+      if (webSocket.sendTXT("{\"code\":2,\"message\":\"结束语音\"}")) {
       } else {
       }
     }
@@ -146,10 +152,12 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
     case WStype_BIN:
       // 处理二进制数据
       //Serial.printf("收到二进制数据，长度: %d\n", length);
+      if(length>0){
       size_t bytes_written;
       i2s_write(I2S_OUT_PORT, payload, length, &bytes_written, portMAX_DELAY);
-      //delay(1);
       //i2s_zero_dma_buffer(I2S_OUT_PORT);
+      //delay(1);
+      }
       break;
 
     case WStype_ERROR:
