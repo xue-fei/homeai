@@ -14,7 +14,6 @@ namespace server
         bool initDone = false;
         int SampleRate = 22050;
         string modelPath;
-
         public IWebSocketConnection client = null;
 
         public Tts()
@@ -36,7 +35,6 @@ namespace server
                     + modelPath + "/number.fst";
             config.MaxNumSentences = 1;
             ot = new OfflineTts(config);
-            otc = new OfflineTtsCallback(OnAudioData);
             SampleRate = ot.SampleRate;
             Console.WriteLine("SampleRate:" + SampleRate);
             if (!Directory.Exists(Environment.CurrentDirectory + "/audio"))
@@ -63,7 +61,24 @@ namespace server
                 Console.WriteLine("文字转语音未完成初始化");
                 return;
             }
+            otc = new OfflineTtsCallback(OnAudioData);
             otga = ot.GenerateWithCallback(text, speed, speakerId, otc);
+        }
+
+        /// <summary>
+        /// 打断
+        /// </summary>
+        public void Interrupt()
+        {
+            if (otga != null)
+            {
+                otga.Dispose();
+            }
+            if (otc != null)
+            {
+                otc = null;
+            }
+            sendQueue.Clear();
         }
 
         private int OnAudioData(nint samples, int n)
@@ -93,7 +108,10 @@ namespace server
             }
         }
 
-        private Queue<byte> sendQueue = new Queue<byte>();
+        /// <summary>
+        /// 20M的音频数据队列
+        /// </summary>
+        private Queue<byte> sendQueue = new Queue<byte>(10240000*2);
 
         public void Update()
         {
