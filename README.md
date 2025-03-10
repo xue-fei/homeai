@@ -17,3 +17,5 @@ https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models/sherpa-onnx-k
 client  
 WebSockets   
 https://github.com/Links2004/arduinoWebSockets  
+
+![丐中丐](https://github.com/xue-fei/homeai/blob/main/%E5%BE%AE%E4%BF%A1%E5%9B%BE%E7%89%87_20250310111628.jpg)
