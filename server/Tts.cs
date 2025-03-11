@@ -61,31 +61,29 @@ namespace server
                 Console.WriteLine("文字转语音未完成初始化");
                 return;
             }
+            stopped = false;
             otc = new OfflineTtsCallback(OnAudioData);
             otga = ot.GenerateWithCallback(text, speed, speakerId, otc);
         }
 
+        bool stopped = false;
         /// <summary>
         /// 打断
         /// </summary>
         public void Interrupt()
         {
-            sendQueue.Clear();
-            if (otc != null)
-            {
-                otc = null;
-            }
-            if (otga != null)
-            { 
-                otga.Dispose(); 
-                otga = null;
-            }
+            stopped = true;
             sendQueue.Clear();
         }
 
         private int OnAudioData(nint samples, int n)
         {
-            Console.WriteLine("OnAudioData n:"+n);
+            Console.WriteLine("OnAudioData n:" + n);
+            if (stopped)
+            {
+                sendQueue.Clear();
+                return 0;
+            }
             float[] floatData = new float[n];
             Marshal.Copy(samples, floatData, 0, n);
             short[] shortData = new short[n];
@@ -93,11 +91,11 @@ namespace server
             {
                 shortData[i] = Math.Clamp((short)(floatData[i] * 32768f), short.MinValue, short.MaxValue);
             }
-            Task task = new Task(() =>
-            {
-                HandleFloatData(shortData);
-            });
-            task.Start();
+            //Task task = new Task(() =>
+            //{
+            HandleFloatData(shortData);
+            //});
+            //task.Start();
             return n;
         }
 
@@ -120,25 +118,28 @@ namespace server
         {
             while (true)
             {
-                List<byte> bytesToSend = new List<byte>();
-                if (sendQueue.Count >= count)
+                if (!stopped)
                 {
-                    for (int i = 0; i < count; i++)
+                    List<byte> bytesToSend = new List<byte>();
+                    if (sendQueue.Count >= count)
                     {
-                        bytesToSend.Add(sendQueue.Dequeue());
+                        for (int i = 0; i < count; i++)
+                        {
+                            bytesToSend.Add(sendQueue.Dequeue());
+                        }
                     }
-                }
-                else if (sendQueue.Count > 0)
-                {
-                    int count = sendQueue.Count;
-                    for (int i = 0; i < count; i++)
+                    else if (sendQueue.Count > 0)
                     {
-                        bytesToSend.Add(sendQueue.Dequeue());
+                        int count = sendQueue.Count;
+                        for (int i = 0; i < count; i++)
+                        {
+                            bytesToSend.Add(sendQueue.Dequeue());
+                        }
                     }
-                }
-                if (bytesToSend.Count > 0 && client != null && client.IsAvailable)
-                {
-                    client.Send(bytesToSend.ToArray());
+                    if (bytesToSend.Count > 0 && client != null && client.IsAvailable)
+                    {
+                        client.Send(bytesToSend.ToArray());
+                    }
                 }
                 Thread.Sleep(10);
             }
