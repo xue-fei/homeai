@@ -20,7 +20,7 @@ namespace server
 
         public IWebSocketConnection client = null;
         Keyword keyword;
-        Llm llm; 
+        Llm llm;
 
         public Asr()
         {
@@ -137,12 +137,26 @@ namespace server
         public void Stop()
         {
             client = null;
-            recognizer.Dispose();
-            recognizer = null;
-            offlineStream.Dispose();
-            offlineStream = null;
-            offlinePunctuation.Dispose();
-            offlinePunctuation = null;
+            if (recognizer != null)
+            {
+                recognizer.Dispose();
+                recognizer = null;
+            }
+            if (offlineStream != null)
+            {
+                offlineStream.Dispose();
+                offlineStream = null;
+            }
+            if (offlinePunctuation != null)
+            {
+                offlinePunctuation.Dispose();
+                offlinePunctuation = null;
+            }
+            if (llm != null)
+            {
+                llm.Stop();
+                llm = null;
+            }
         }
     }
 }

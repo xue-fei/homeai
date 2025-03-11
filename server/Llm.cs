@@ -37,5 +37,14 @@ namespace server
                 }
             }
         }
+
+        public void Stop()
+        {
+            if (ollama != null)
+            {
+                ollama.Dispose();
+                ollama = null;
+            }
+        }
     }
 }
