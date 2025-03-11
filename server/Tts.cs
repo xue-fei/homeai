@@ -70,19 +70,22 @@ namespace server
         /// </summary>
         public void Interrupt()
         {
-            if (otga != null)
-            {
-                otga.Dispose();
-            }
+            sendQueue.Clear();
             if (otc != null)
             {
                 otc = null;
+            }
+            if (otga != null)
+            { 
+                otga.Dispose(); 
+                otga = null;
             }
             sendQueue.Clear();
         }
 
         private int OnAudioData(nint samples, int n)
         {
+            Console.WriteLine("OnAudioData n:"+n);
             float[] floatData = new float[n];
             Marshal.Copy(samples, floatData, 0, n);
             short[] shortData = new short[n];
@@ -111,16 +114,16 @@ namespace server
         /// <summary>
         /// 20M的音频数据队列
         /// </summary>
-        private Queue<byte> sendQueue = new Queue<byte>(10240000*2);
-
+        private Queue<byte> sendQueue = new Queue<byte>(10240000 * 2);
+        private int count = 2048;
         public void Update()
         {
             while (true)
             {
                 List<byte> bytesToSend = new List<byte>();
-                if (sendQueue.Count >= 1536)
+                if (sendQueue.Count >= count)
                 {
-                    for (int i = 0; i < 1536; i++)
+                    for (int i = 0; i < count; i++)
                     {
                         bytesToSend.Add(sendQueue.Dequeue());
                     }
