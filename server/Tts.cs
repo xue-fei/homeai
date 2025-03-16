@@ -1,5 +1,4 @@
 ﻿using Fleck;
-using Newtonsoft.Json;
 using SherpaOnnx;
 using System.Runtime.InteropServices;
 
@@ -36,7 +35,7 @@ namespace server
             config.MaxNumSentences = 1;
             ot = new OfflineTts(config);
             SampleRate = ot.SampleRate;
-            Console.WriteLine("SampleRate:" + SampleRate);
+            //Console.WriteLine("SampleRate:" + SampleRate);
             if (!Directory.Exists(Environment.CurrentDirectory + "/audio"))
             {
                 Directory.CreateDirectory(Environment.CurrentDirectory + "/audio");
@@ -46,12 +45,9 @@ namespace server
             thread.Start();
         }
 
-        public void Start(IWebSocketConnection connection)
+        public void UpdateClient(IWebSocketConnection connection)
         {
-            client = connection;
-            BaseMsg tempMsg = new BaseMsg(-1, "tts is ready");
-            client.Send(JsonConvert.SerializeObject(tempMsg));
-            Console.WriteLine("tts is ready");
+            client = connection; 
         }
 
         public void Generate(string text, float speed, int speakerId)
@@ -74,14 +70,27 @@ namespace server
         {
             stopped = true;
             sendQueue.Clear();
+            sendQueue = new(10240000 * 2);
+            if (otc != null)
+            {
+                otc = null;
+            }
+            if (otga!=null)
+            {
+                otga.Dispose();
+                otga = null;
+            }
         }
 
         private int OnAudioData(nint samples, int n)
         {
-            Console.WriteLine("OnAudioData n:" + n);
+            //Console.WriteLine("OnAudioData n:" + n);
             if (stopped)
             {
                 sendQueue.Clear();
+                sendQueue = new(10240000 * 2);
+                Console.WriteLine("停止生成");
+                stopped = false;
                 return 0;
             }
             float[] floatData = new float[n];
@@ -91,11 +100,7 @@ namespace server
             {
                 shortData[i] = Math.Clamp((short)(floatData[i] * 32768f), short.MinValue, short.MaxValue);
             }
-            //Task task = new Task(() =>
-            //{
             HandleFloatData(shortData);
-            //});
-            //task.Start();
             return n;
         }
 
@@ -112,7 +117,7 @@ namespace server
         /// <summary>
         /// 20M的音频数据队列
         /// </summary>
-        private Queue<byte> sendQueue = new Queue<byte>(10240000 * 2);
+        private Queue<byte> sendQueue = new(10240000 * 2);
         private int count = 2048;
         public void Update()
         {

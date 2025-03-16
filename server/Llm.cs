@@ -5,12 +5,11 @@ namespace server
 {
     public class Llm
     {
-        Tts tts;
+        public Tts tts;
         OllamaApiClient ollama;
 
-        public void Start(Tts tts)
+        public Llm()
         {
-            this.tts = tts;
             var uri = new Uri("http://localhost:11434");
             ollama = new OllamaApiClient(uri, "qwen2:1.5b");
         }
@@ -28,7 +27,7 @@ namespace server
                     // 如果已结束
                     if (stream.Done)
                     {
-                        Console.Write(stream.Response);
+                        Console.WriteLine("模型回答:"+stream.Response);
                         if (tts != null)
                         {
                             tts.Generate(stream.Response, 1f, 0);

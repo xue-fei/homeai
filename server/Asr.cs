@@ -18,9 +18,10 @@ namespace server
 
         OfflinePunctuation offlinePunctuation = null;
 
-        public IWebSocketConnection client = null;
+        IWebSocketConnection client = null;
         Keyword keyword;
-        Llm llm;
+
+        public Llm llm = null;
 
         public Asr()
         {
@@ -60,17 +61,13 @@ namespace server
             opc.Model = opmc;
             offlinePunctuation = new OfflinePunctuation(opc);
             #endregion 
+
+            keyword = new Keyword();
         }
 
-        public void Start(IWebSocketConnection connection, Tts tts = null)
-        {
-            keyword = new Keyword();
-            llm = new Llm();
-            llm.Start(tts);
-            client = connection;
-            BaseMsg tempMsg = new BaseMsg(-1, "asr is ready");
-            client.Send(JsonConvert.SerializeObject(tempMsg));
-            Console.WriteLine("asr is ready");
+        public void UpdateClient(IWebSocketConnection connection)
+        { 
+            client = connection; 
         }
 
         List<byte> buffer = new List<byte>();
@@ -111,7 +108,7 @@ namespace server
             using (var denoiser = new Denoiser())
             {
                 int count = denoiser.Denoise(floatArray.AsSpan());
-                Console.WriteLine("denoised count:" + count);
+                //Console.WriteLine("denoised count:" + count);
             }
 
             keyword.Recognize(floatArray);
@@ -121,7 +118,7 @@ namespace server
             recognizer.Decode(offlineStream);
             string result = offlineStream.Result.Text;
             offlineStream.Dispose();
-            Console.WriteLine("result:" + result);
+            Console.WriteLine("识别结果:" + result);
             if (!string.IsNullOrWhiteSpace(result))
             {
                 result = offlinePunctuation.AddPunct(result.ToLower());
