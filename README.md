@@ -1,8 +1,7 @@
 # homeai  
 homeai  
 asr tts https://github.com/k2-fsa/sherpa-onnx  
-ollamasharp https://github.com/awaescher/OllamaSharp  
-RNNoise.Net https://github.com/Yellow-Dog-Man/RNNoise.Net  
+ollamasharp https://github.com/awaescher/OllamaSharp    
 
 server  
 sherpa-onnx-paraformer-zh-small-2024-03-09   
