@@ -13,6 +13,8 @@ vits-melo-tts-zh_en
 https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-melo-tts-zh_en.tar.bz2  
 sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01   
 https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models/sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01.tar.bz2   
+gtcrn_simple.onnx   
+https://github.com/k2-fsa/sherpa-onnx/releases/download/speech-enhancement-models/gtcrn_simple.onnx   
 
 client  
 WebSockets   

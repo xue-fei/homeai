@@ -1,7 +1,6 @@
 ﻿using Newtonsoft.Json;
 using SherpaOnnx;
 using Fleck;
-using RNNoise.NET;
 
 namespace server
 {
@@ -17,6 +16,7 @@ namespace server
         int sampleRate = 16000;
 
         OfflinePunctuation offlinePunctuation = null;
+        OfflineSpeechDenoiser offlineSpeechDenoiser = null;
 
         IWebSocketConnection client = null;
         Keyword keyword;
@@ -61,13 +61,23 @@ namespace server
             opc.Model = opmc;
             offlinePunctuation = new OfflinePunctuation(opc);
             #endregion 
+            OfflineSpeechDenoiserGtcrnModelConfig osdgmc = new OfflineSpeechDenoiserGtcrnModelConfig();
+            osdgmc.Model = Environment.CurrentDirectory + "/gtcrn_simple.onnx";
+            OfflineSpeechDenoiserModelConfig osdmc = new OfflineSpeechDenoiserModelConfig();
+            osdmc.NumThreads = numThreads;
+            osdmc.Provider = "cpu";
+            osdmc.Debug = 0;
+            osdmc.Gtcrn = osdgmc;
+            OfflineSpeechDenoiserConfig osdc = new OfflineSpeechDenoiserConfig();
+            osdc.Model = osdmc;
+            offlineSpeechDenoiser = new OfflineSpeechDenoiser(osdc);
 
             keyword = new Keyword();
         }
 
         public void UpdateClient(IWebSocketConnection connection)
-        { 
-            client = connection; 
+        {
+            client = connection;
         }
 
         List<byte> buffer = new List<byte>();
@@ -90,6 +100,7 @@ namespace server
             buffer.Clear();
         }
 
+        DenoisedAudio denoisedAudio;
         /// <summary>
         /// 识别语音数据
         /// </summary>
@@ -104,12 +115,9 @@ namespace server
             {
                 floatArray[i] = int16Array[i] / 32768.0f;
             }
-            // 降噪
-            using (var denoiser = new Denoiser())
-            {
-                int count = denoiser.Denoise(floatArray.AsSpan());
-                //Console.WriteLine("denoised count:" + count);
-            }
+            // 语音增强
+            denoisedAudio = offlineSpeechDenoiser.Run(floatArray, sampleRate);
+            floatArray = denoisedAudio.Samples; 
 
             keyword.Recognize(floatArray);
 
@@ -153,6 +161,11 @@ namespace server
             {
                 llm.Stop();
                 llm = null;
+            }
+            if (offlineSpeechDenoiser != null)
+            {
+                offlineSpeechDenoiser.Dispose();
+                offlineSpeechDenoiser = null;
             }
         }
     }

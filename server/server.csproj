@@ -11,8 +11,7 @@
     <PackageReference Include="Fleck" Version="1.2.0" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
     <PackageReference Include="OllamaSharp" Version="5.1.7" />
-    <PackageReference Include="org.k2fsa.sherpa.onnx" Version="1.10.46" />
-    <PackageReference Include="YellowDogMan.RRNoise.NET" Version="0.1.6" />
+    <PackageReference Include="org.k2fsa.sherpa.onnx" Version="1.11.2" />
   </ItemGroup>
 
 </Project>
