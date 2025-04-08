@@ -14,6 +14,8 @@ sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01
 https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models/sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01.tar.bz2   
 gtcrn_simple.onnx   
 https://github.com/k2-fsa/sherpa-onnx/releases/download/speech-enhancement-models/gtcrn_simple.onnx   
+silero_vad.onnx   
+https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx   
 
 client  
 WebSockets   

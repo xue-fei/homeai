@@ -20,6 +20,7 @@ namespace server
 
         IWebSocketConnection client = null;
         Keyword keyword;
+        VoiceActivityDetector vad;
 
         public Llm llm = null;
 
@@ -73,6 +74,23 @@ namespace server
             offlineSpeechDenoiser = new OfflineSpeechDenoiser(osdc);
 
             keyword = new Keyword();
+
+            VadModelConfig vadModelConfig = new VadModelConfig();
+
+            SileroVadModelConfig SileroVad = new SileroVadModelConfig();
+            SileroVad.Model = Environment.CurrentDirectory + "/silero_vad.onnx";
+            SileroVad.MinSilenceDuration = 0.25f;
+            SileroVad.MinSpeechDuration = 0.5f;
+            SileroVad.Threshold = 0.5f;
+            SileroVad.WindowSize = 512;
+
+            vadModelConfig.SileroVad = SileroVad;
+            vadModelConfig.SampleRate = sampleRate;
+            vadModelConfig.NumThreads = numThreads;
+            vadModelConfig.Provider = "cpu";
+            vadModelConfig.Debug = 0;
+
+            vad = new VoiceActivityDetector(vadModelConfig, 60);
         }
 
         public void UpdateClient(IWebSocketConnection connection)
@@ -115,9 +133,15 @@ namespace server
             {
                 floatArray[i] = int16Array[i] / 32768.0f;
             }
+            vad.AcceptWaveform(floatArray);
+            if (!vad.IsSpeechDetected())
+            {
+                Console.WriteLine("你咋不说话呐");
+                return;
+            }
             // 语音增强
             denoisedAudio = offlineSpeechDenoiser.Run(floatArray, sampleRate);
-            floatArray = denoisedAudio.Samples; 
+            floatArray = denoisedAudio.Samples;
 
             keyword.Recognize(floatArray);
 
