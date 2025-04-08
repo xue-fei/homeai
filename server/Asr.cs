@@ -112,9 +112,7 @@ namespace server
         /// 结束接收语音数据
         /// </summary>
         public void EndReceive()
-        {
-            File.WriteAllBytes(Environment.CurrentDirectory + "/audio/"
-                + DateTime.Now.ToFileTime() + ".wav", buffer.ToArray());
+        { 
             Recognize(buffer.ToArray());
             buffer.Clear();
         }
@@ -137,7 +135,8 @@ namespace server
             // 语音增强
             denoisedAudio = offlineSpeechDenoiser.Run(floatArray, sampleRate);
             floatArray = denoisedAudio.Samples;
-
+            File.WriteAllBytes(Environment.CurrentDirectory + "/audio/"
+                + DateTime.Now.ToFileTime() + ".wav", WavUtility.AddWavHeader(buffer.ToArray(), 16000, 1, 16));
             keyword.Recognize(floatArray);
 
             offlineStream = recognizer.CreateStream();
