@@ -20,6 +20,7 @@ namespace server
 
         IWebSocketConnection client = null;
         Keyword keyword;
+        SileroVadModelConfig svmc;
         VoiceActivityDetector vad;
 
         public Llm llm = null;
@@ -77,14 +78,14 @@ namespace server
 
             VadModelConfig vadModelConfig = new VadModelConfig();
 
-            SileroVadModelConfig SileroVad = new SileroVadModelConfig();
-            SileroVad.Model = Environment.CurrentDirectory + "/silero_vad.onnx";
-            SileroVad.MinSilenceDuration = 0.25f;
-            SileroVad.MinSpeechDuration = 0.5f;
-            SileroVad.Threshold = 0.5f;
-            SileroVad.WindowSize = 512;
+            svmc = new SileroVadModelConfig();
+            svmc.Model = Environment.CurrentDirectory + "/silero_vad.onnx";
+            svmc.MinSilenceDuration = 0.25f;
+            svmc.MinSpeechDuration = 0.5f;
+            svmc.Threshold = 0.5f;
+            svmc.WindowSize = 512;
 
-            vadModelConfig.SileroVad = SileroVad;
+            vadModelConfig.SileroVad = svmc;
             vadModelConfig.SampleRate = sampleRate;
             vadModelConfig.NumThreads = numThreads;
             vadModelConfig.Provider = "cpu";
@@ -112,8 +113,8 @@ namespace server
         /// </summary>
         public void EndReceive()
         {
-            //File.WriteAllBytes(Environment.CurrentDirectory + "/"
-            //    + "test.pcm", buffer.ToArray());
+            File.WriteAllBytes(Environment.CurrentDirectory + "/audio/"
+                + DateTime.Now.ToFileTime() + ".wav", buffer.ToArray());
             Recognize(buffer.ToArray());
             buffer.Clear();
         }
@@ -132,12 +133,6 @@ namespace server
             for (int i = 0; i < int16Array.Length; i++)
             {
                 floatArray[i] = int16Array[i] / 32768.0f;
-            }
-            vad.AcceptWaveform(floatArray);
-            if (!vad.IsSpeechDetected())
-            {
-                Console.WriteLine("你咋不说话呐");
-                return;
             }
             // 语音增强
             denoisedAudio = offlineSpeechDenoiser.Run(floatArray, sampleRate);
