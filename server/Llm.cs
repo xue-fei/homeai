@@ -21,12 +21,15 @@ namespace server
         // 句子结束符正则（支持中英文标点）
         Regex sentenceDelimiters = new Regex(@"[。！？.!?](\s|$)|[。！？.!?][”’](\s|$)");
 
+        CancellationTokenSource cts;
+
         public async void RequestAsync(string prompt)
         {
+            cts = new CancellationTokenSource();
             GenerateRequest gr = new GenerateRequest();
             gr.Prompt = prompt;
             gr.Stream = true;
-            var resp = ollama.GenerateAsync(gr);
+            var resp = ollama.GenerateAsync(gr, cts.Token);
             await foreach (GenerateResponseStream? stream in resp)
             {
                 if (stream != null)
@@ -81,6 +84,17 @@ namespace server
 
             // 保留未完成部分
             buffer = new StringBuilder(content.Substring(lastIndex));
+        }
+
+        /// <summary>
+        /// 打断生成过程
+        /// </summary>
+        public void Interrupt()
+        {
+            if (cts != null)
+            {
+                cts.Cancel();
+            }
         }
 
         public void Stop()

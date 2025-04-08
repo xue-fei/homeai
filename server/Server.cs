@@ -40,7 +40,7 @@ namespace server
         }
 
         private void OnOpen(IWebSocketConnection connection)
-        { 
+        {
             tts.UpdateClient(connection);
             asr.UpdateClient(connection);
             Console.WriteLine("上线了");
@@ -75,6 +75,10 @@ namespace server
                 // 收到code 1时，开始录音
                 if (baseMsg.code == 1)
                 {
+                    if (llm != null)
+                    {
+                        llm.Interrupt();
+                    }
                     if (tts != null)
                     {
                         tts.Interrupt();
