@@ -7,7 +7,7 @@ const char* ssid = "ssid";
 const char* password = "password";
 
 // WebSocket服务器配置
-const char* websocketServer = "172.32.151.240";
+const char* websocketServer = "192.168.0.164";
 const int websocketPort = 9999;
 const char* websocketPath = "/";
 
@@ -32,7 +32,7 @@ const char* websocketPath = "/";
 WiFiClient wifiClient;
 WebSocketsClient webSocket;
 // 开关按钮
-#define PIN_BUTTON 47  
+#define PIN_BUTTON 47
 bool pressed = false;
 
 void setup() {
@@ -97,18 +97,30 @@ void setup() {
   webSocket.begin(websocketServer, websocketPort, websocketPath);
   webSocket.onEvent(webSocketEvent);
   //开关按钮为输入开启上拉电阻
-  pinMode(PIN_BUTTON, INPUT_PULLUP);  
+  pinMode(PIN_BUTTON, INPUT_PULLUP);
 }
+
+unsigned long previousMillis = 0; // 上次发送消息的时间
+const long interval = 1000; // 间隔时间（毫秒）
 
 void loop() {
   webSocket.loop();  // 必须调用以处理WebSocket事件
+  unsigned long currentMillis = millis(); // 获取当前时间（毫秒）
+  if (currentMillis - previousMillis >= interval) {
+    if (webSocket.sendTXT("{\"code\":0,\"message\":\"心跳消息\"}")) {
+      previousMillis = currentMillis; // 更新上次发送时间
+      } else {
+      }
+    
+  }
   if (digitalRead(PIN_BUTTON) == LOW) {
-    if(!pressed){
-      pressed = true; 
+    if (!pressed) {
+      pressed = true;
+      i2s_zero_dma_buffer(I2S_OUT_PORT);
+      //delay(10);
       if (webSocket.sendTXT("{\"code\":1,\"message\":\"开始语音\"}")) {
       } else {
       }
-      i2s_zero_dma_buffer(I2S_OUT_PORT);
     }
     uint8_t buffer[BUFFER_SIZE];
     size_t bytesRead;
@@ -152,11 +164,19 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
     case WStype_BIN:
       // 处理二进制数据
       //Serial.printf("收到二进制数据，长度: %d\n", length);
-      if(length>0){
-      size_t bytes_written;
-      i2s_write(I2S_OUT_PORT, payload, length, &bytes_written, portMAX_DELAY);
-      //i2s_zero_dma_buffer(I2S_OUT_PORT);
-      //delay(1);
+      if (!pressed) {
+        if (length > 0) {
+          size_t bytes_written;
+          i2s_write(I2S_OUT_PORT, payload, length, &bytes_written, portMAX_DELAY);
+          //i2s_zero_dma_buffer(I2S_OUT_PORT);
+          //delay(1);
+        }
+      }
+      else
+      {
+        if (length > 0) {
+          i2s_zero_dma_buffer(I2S_OUT_PORT);
+        }
       }
       break;
 
