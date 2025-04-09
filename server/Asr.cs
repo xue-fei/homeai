@@ -112,17 +112,38 @@ namespace server
         /// 结束接收语音数据
         /// </summary>
         public void EndReceive()
-        { 
-            Recognize(buffer.ToArray());
+        {
+            Denoise(buffer.ToArray());
             buffer.Clear();
         }
 
         DenoisedAudio denoisedAudio;
-        /// <summary>
-        /// 识别语音数据
-        /// </summary>
         short[] int16Array;
         float[] floatArray;
+
+        void Denoise(byte[] bytes)
+        {
+            int16Array = new short[bytes.Length / 2];
+            Buffer.BlockCopy(bytes, 0, int16Array, 0, bytes.Length);
+            floatArray = new float[int16Array.Length];
+            for (int i = 0; i < int16Array.Length; i++)
+            {
+                floatArray[i] = int16Array[i] / 32767.0f;
+            }
+            denoisedAudio = offlineSpeechDenoiser.Run(floatArray, sampleRate);
+            string file = Environment.CurrentDirectory + "/audio/" + DateTime.Now.ToFileTime() + ".wav";
+            if (denoisedAudio.SaveToWaveFile(file))
+            {
+                byte[] audiobs = File.ReadAllBytes(file);
+                Recognize(audiobs);
+            }
+            else
+            {
+                Console.WriteLine("降噪音频保存失败");
+            }
+            denoisedAudio.Dispose();
+        }
+
         private void Recognize(byte[] bytes)
         {
             int16Array = new short[bytes.Length / 2];
@@ -130,13 +151,8 @@ namespace server
             floatArray = new float[int16Array.Length];
             for (int i = 0; i < int16Array.Length; i++)
             {
-                floatArray[i] = int16Array[i] / 32768.0f;
+                floatArray[i] = int16Array[i] / 32767.0f;
             }
-            // 语音增强
-            denoisedAudio = offlineSpeechDenoiser.Run(floatArray, sampleRate);
-            floatArray = denoisedAudio.Samples;
-            File.WriteAllBytes(Environment.CurrentDirectory + "/audio/"
-                + DateTime.Now.ToFileTime() + ".wav", WavUtility.AddWavHeader(buffer.ToArray(), 16000, 1, 16));
             keyword.Recognize(floatArray);
 
             offlineStream = recognizer.CreateStream();
