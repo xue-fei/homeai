@@ -106,6 +106,10 @@ namespace server
 
         void HandleFloatData(short[] shortData)
         {
+            if(stopped)
+            {
+                return;
+            }
             byte[] byteData = new byte[shortData.Length * 2];
             Buffer.BlockCopy(shortData, 0, byteData, 0, byteData.Length);
             foreach (byte b in byteData)
