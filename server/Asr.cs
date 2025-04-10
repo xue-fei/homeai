@@ -128,7 +128,7 @@ namespace server
             floatArray = new float[int16Array.Length];
             for (int i = 0; i < int16Array.Length; i++)
             {
-                floatArray[i] = int16Array[i] / 32767.0f;
+                floatArray[i] = (int16Array[i] / 32767.0f);
             }
             denoisedAudio = offlineSpeechDenoiser.Run(floatArray, sampleRate);
             string file = Environment.CurrentDirectory + "/audio/" + DateTime.Now.ToFileTime() + ".wav";
