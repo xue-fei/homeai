@@ -13,7 +13,7 @@ namespace server
         public Llm()
         {
             var uri = new Uri("http://localhost:11434");
-            ollama = new OllamaApiClient(uri, "qwen2:1.5b");
+            ollama = new OllamaApiClient(uri, "qwen2.5:1.5b");
         }
 
         // 实时句子缓冲区
@@ -30,29 +30,31 @@ namespace server
             gr.Prompt = prompt;
             gr.Stream = true;
             var resp = ollama.GenerateAsync(gr, cts.Token);
-            await foreach (GenerateResponseStream? stream in resp)
+            try
             {
-                if (stream != null)
+                await foreach (GenerateResponseStream? stream in resp)
                 {
-                    //Console.WriteLine("模型回答:" + stream.Response);
-
-                    // 追加新内容到缓冲区
-                    sentenceBuffer.Append(stream.Response);
-
-                    // 实时处理缓冲区
-                    ProcessBuffer(ref sentenceBuffer);
-
-                    // 如果已结束
-                    if (stream.Done)
+                    if (stream != null)
                     {
-                        break;
-                        //Console.WriteLine("模型回答:"+stream.Response);
-                        //if (tts != null)
-                        //{
-                        //    tts.Generate(stream.Response, 1f, 0);
-                        //}
+                        //Console.WriteLine("模型回答:" + stream.Response);
+
+                        // 追加新内容到缓冲区
+                        sentenceBuffer.Append(stream.Response);
+
+                        // 实时处理缓冲区
+                        ProcessBuffer(ref sentenceBuffer);
+
+                        // 如果已结束
+                        if (stream.Done)
+                        {
+                            break;
+                        }
                     }
                 }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex);
             }
         }
 
@@ -94,6 +96,7 @@ namespace server
             if (cts != null)
             {
                 cts.Cancel();
+                cts = null;
             }
         }
 
