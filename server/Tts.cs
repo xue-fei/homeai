@@ -14,6 +14,7 @@ namespace server
         int SampleRate = 22050;
         string modelPath;
         public IWebSocketConnection client = null;
+        float volume = 0.5f;
 
         public Tts()
         {
@@ -47,7 +48,7 @@ namespace server
 
         public void UpdateClient(IWebSocketConnection connection)
         {
-            client = connection; 
+            client = connection;
         }
 
         public void Generate(string text, float speed, int speakerId)
@@ -75,7 +76,7 @@ namespace server
             {
                 otc = null;
             }
-            if (otga!=null)
+            if (otga != null)
             {
                 otga.Dispose();
                 otga = null;
@@ -98,7 +99,7 @@ namespace server
             short[] shortData = new short[n];
             for (int i = 0; i < n; i++)
             {
-                shortData[i] = Math.Clamp((short)(floatData[i] * 32768f), short.MinValue, short.MaxValue);
+                shortData[i] = Math.Clamp((short)(floatData[i] * 32767f * volume), short.MinValue, short.MaxValue);
             }
             HandleFloatData(shortData);
             return n;
@@ -106,7 +107,7 @@ namespace server
 
         void HandleFloatData(short[] shortData)
         {
-            if(stopped)
+            if (stopped)
             {
                 return;
             }
