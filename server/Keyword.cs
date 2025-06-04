@@ -47,7 +47,7 @@ namespace server
                 {
                     // Remember to call Reset() right after detecting a keyword
                     keywordSpotter.Reset(onlineStream);
-                    Console.WriteLine("Detected: {0}", result.Keyword);
+                    Console.WriteLine("关键字: {0}", result.Keyword);
                     return result.Keyword;
                 }
             }

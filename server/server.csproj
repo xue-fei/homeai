@@ -10,8 +10,8 @@
   <ItemGroup>
     <PackageReference Include="Fleck" Version="1.2.0" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
-    <PackageReference Include="OllamaSharp" Version="5.1.10" />
-    <PackageReference Include="org.k2fsa.sherpa.onnx" Version="1.11.3" />
+    <PackageReference Include="OllamaSharp" Version="5.2.2" />
+    <PackageReference Include="org.k2fsa.sherpa.onnx" Version="1.12.1" />
   </ItemGroup>
 
 </Project>
