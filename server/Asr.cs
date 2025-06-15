@@ -9,8 +9,10 @@ namespace server
         OfflineRecognizer recognizer = null;
         OfflineStream offlineStream = null;
         string tokensPath = "tokens.txt";
-        string paraformer = "model.int8.onnx";
-        string decodingMethod = "greedy_search";
+        string encoder = "encoder-epoch-99-avg-1.onnx";
+        string decoder = "decoder-epoch-99-avg-1.onnx";
+        string joiner = "joiner-epoch-99-avg-1.onnx";
+        string decodingMethod = "modified_beam_search";
         int numThreads = 1;
         string modelPath;
         int sampleRate = 16000;
@@ -28,7 +30,7 @@ namespace server
         public Asr()
         {
             //需要将此文件夹拷贝到exe所在的目录
-            modelPath = Environment.CurrentDirectory + "/sherpa-onnx-paraformer-zh-small-2024-03-09";
+            modelPath = Environment.CurrentDirectory + "/sherpa-onnx-conformer-zh-stateless2-2023-05-23";
             OfflineRecognizerConfig config = new OfflineRecognizerConfig();
             config.FeatConfig.SampleRate = sampleRate;
             config.FeatConfig.FeatureDim = 80;
@@ -36,16 +38,17 @@ namespace server
 
             OfflineModelConfig offlineModelConfig = new OfflineModelConfig();
             offlineModelConfig.Tokens = Path.Combine(modelPath, tokensPath);
+            offlineModelConfig.Transducer.Encoder = Path.Combine(modelPath, encoder);
+            offlineModelConfig.Transducer.Decoder = Path.Combine(modelPath, decoder);
+            offlineModelConfig.Transducer.Joiner = Path.Combine(modelPath, joiner);
             offlineModelConfig.NumThreads = numThreads;
             offlineModelConfig.Provider = "cpu";
+            config.ModelConfig.ModelingUnit = "cjkchar";
+            config.HotwordsFile = Path.Combine(modelPath, "hotwords_cn.txt");
+            config.HotwordsScore = 2.0f;
             offlineModelConfig.Debug = 0;
-
-            OfflineParaformerModelConfig paraformerConfig = new OfflineParaformerModelConfig();
-            paraformerConfig.Model = Path.Combine(modelPath, paraformer);
-
-            offlineModelConfig.Paraformer = paraformerConfig;
             config.ModelConfig = offlineModelConfig;
-
+             
             OfflineLMConfig offlineLMConfig = new OfflineLMConfig();
             offlineLMConfig.Scale = 0.5f;
             config.LmConfig = offlineLMConfig;
@@ -63,6 +66,7 @@ namespace server
             opc.Model = opmc;
             offlinePunctuation = new OfflinePunctuation(opc);
             #endregion 
+
             OfflineSpeechDenoiserGtcrnModelConfig osdgmc = new OfflineSpeechDenoiserGtcrnModelConfig();
             osdgmc.Model = Environment.CurrentDirectory + "/gtcrn_simple.onnx";
             OfflineSpeechDenoiserModelConfig osdmc = new OfflineSpeechDenoiserModelConfig();
@@ -97,6 +101,10 @@ namespace server
         public void UpdateClient(IWebSocketConnection connection)
         {
             client = connection;
+            if (connection == null)
+            {
+                llm.Interrupt();
+            }
         }
 
         List<byte> buffer = new List<byte>();
@@ -165,10 +173,13 @@ namespace server
             {
                 result = offlinePunctuation.AddPunct(result.ToLower());
                 BaseMsg textMsg = new BaseMsg(1, result);
-                client.Send(JsonConvert.SerializeObject(textMsg));
-                if (llm != null)
+                if (client != null && client.IsAvailable)
                 {
-                    llm.RequestAsync(result);
+                    client.Send(JsonConvert.SerializeObject(textMsg));
+                    if (llm != null)
+                    {
+                        llm.RequestAsync(result);
+                    }
                 }
             }
         }
