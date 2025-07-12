@@ -1,5 +1,7 @@
 ﻿using Fleck;
+using Timer = System.Timers.Timer;
 using Newtonsoft.Json;
+using System.Timers;
 
 namespace server
 {
@@ -9,6 +11,11 @@ namespace server
         Asr asr = null;
         Tts tts = null;
         Llm llm = null;
+        IWebSocketConnection client;
+        float checkRate = 1000;
+        float offlineTime = 3;
+        long lastTickTime = 0;
+        Timer timer;
 
         public Server()
         {
@@ -21,7 +28,7 @@ namespace server
 
             Console.WriteLine("tts llm asr ok");
 
-            webSocketServer = new WebSocketServer("ws://192.168.0.164:9999");
+            webSocketServer = new WebSocketServer("ws://192.168.2.177:9999");
             //webSocketServer.Certificate =
             //    new System.Security.Cryptography.X509Certificates.X509Certificate2(
             //        Environment.CurrentDirectory + "/usherpa.xuefei.net.cn.pfx", "xb5ceehg");
@@ -41,13 +48,36 @@ namespace server
 
         private void OnOpen(IWebSocketConnection connection)
         {
-            tts.UpdateClient(connection);
-            asr.UpdateClient(connection);
+            client = connection;
+            tts.UpdateClient(client);
+            asr.UpdateClient(client);
             Console.WriteLine("上线了");
+            timer = new Timer(checkRate);
+            lastTickTime = GetTimeStamp();
+            timer.Elapsed += CheckTickTime;
+            timer.AutoReset = true;
+            timer.Enabled = true;
+        }
+
+        void CheckTickTime(object sender, ElapsedEventArgs e)
+        { 
+            if (GetTimeStamp() - lastTickTime > offlineTime)
+            {
+                client.Close();
+                client = null;
+                tts.UpdateClient(client);
+                asr.UpdateClient(client);
+                Console.WriteLine("下线了");
+
+                timer.Elapsed -= CheckTickTime;
+                timer.Stop();
+                timer.Dispose();
+            }
         }
 
         private void OnBinary(IWebSocketConnection connection, byte[] bytes)
         {
+            client = connection;
             if (asr != null)
             {
                 asr.Receive(bytes);
@@ -56,6 +86,7 @@ namespace server
 
         private void OnMessage(IWebSocketConnection connection, string msg)
         {
+            client = connection;
             BaseMsg baseMsg = null;
             try
             {
@@ -70,7 +101,7 @@ namespace server
                 // 收到code 0时，心跳消息
                 if (baseMsg.code == 0)
                 {
-
+                    lastTickTime = GetTimeStamp();
                 }
                 // 收到code 1时，开始录音
                 if (baseMsg.code == 1)
@@ -97,9 +128,18 @@ namespace server
 
         private void OnClose(IWebSocketConnection connection)
         {
-            tts.UpdateClient(null);
-            asr.UpdateClient(null);
+            client = connection;
+            client = null;
+            tts.UpdateClient(client);
+            asr.UpdateClient(client);
+
             Console.WriteLine("下线了");
+        }
+
+        private long GetTimeStamp()
+        {
+            TimeSpan ts = DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, 0);
+            return Convert.ToInt64(ts.TotalSeconds);
         }
 
         ~Server()
