@@ -14,19 +14,18 @@ namespace server
         int SampleRate = 22050;
         string modelPath;
         public IWebSocketConnection client = null;
-        float volume = 0.5f;
+        float volume = 1.5f;
 
         public Tts()
         {
-            modelPath = Environment.CurrentDirectory + "/vits-melo-tts-zh_en";
+            modelPath = Environment.CurrentDirectory + "/matcha-icefall-zh-baker";
             config = new OfflineTtsConfig();
-            config.Model.Vits.Model = Path.Combine(modelPath, "model.onnx");
-            config.Model.Vits.Lexicon = Path.Combine(modelPath, "lexicon.txt");
-            config.Model.Vits.Tokens = Path.Combine(modelPath, "tokens.txt");
-            config.Model.Vits.DictDir = Path.Combine(modelPath, "dict");
-            config.Model.Vits.NoiseScale = 0.667f;
-            config.Model.Vits.NoiseScaleW = 0.8f;
-            config.Model.Vits.LengthScale = 1f;
+            config.Model.Matcha.AcousticModel = Path.Combine(modelPath, "model-steps-3.onnx");
+            config.Model.Matcha.Vocoder = Path.Combine(modelPath, "vocos-22khz-univ.onnx");
+            config.Model.Matcha.Lexicon = Path.Combine(modelPath, "lexicon.txt");
+            config.Model.Matcha.Tokens = Path.Combine(modelPath, "tokens.txt");
+            config.Model.Matcha.DictDir = Path.Combine(modelPath, "dict"); 
+            config.Model.Matcha.LengthScale = 1f;
             config.Model.NumThreads = 5;
             config.Model.Debug = 0;
             config.Model.Provider = "cpu";
@@ -49,6 +48,10 @@ namespace server
         public void UpdateClient(IWebSocketConnection connection)
         {
             client = connection;
+            if (connection == null)
+            {
+                Interrupt();
+            }
         }
 
         public void Generate(string text, float speed, int speakerId)
@@ -72,15 +75,6 @@ namespace server
             stopped = true;
             sendQueue.Clear();
             sendQueue = new(10240000 * 2);
-            if (otc != null)
-            {
-                otc = null;
-            }
-            if (otga != null)
-            {
-                otga.Dispose();
-                otga = null;
-            }
         }
 
         private int OnAudioData(nint samples, int n)
