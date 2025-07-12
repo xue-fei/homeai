@@ -11,6 +11,7 @@ namespace server
         private static readonly HttpClient _httpClient = new HttpClient();
         private readonly Regex _sentenceDelimiters = new Regex(@"[。！？.!?](\s|$)|[。！？.!?][”’](\s|$)", RegexOptions.Compiled);
         private readonly StringBuilder _sentenceBuffer = new StringBuilder();
+        HttpRequestMessage hrm;
 
         public async Task RequestAsync(string userMessage)
         {
@@ -27,14 +28,14 @@ namespace server
                 stream = true
             };
 
-            using var request = new HttpRequestMessage(HttpMethod.Post, API_URL);
-            request.Headers.Add("Authorization", $"Bearer {API_KEY}");
-            request.Headers.Add("Accept", "text/event-stream");
+            hrm = new HttpRequestMessage(HttpMethod.Post, API_URL);
+            hrm.Headers.Add("Authorization", $"Bearer {API_KEY}");
+            hrm.Headers.Add("Accept", "text/event-stream");
 
             var json = JsonConvert.SerializeObject(requestData);
-            request.Content = new StringContent(json, Encoding.UTF8, "application/json");
+            hrm.Content = new StringContent(json, Encoding.UTF8, "application/json");
 
-            using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+            using var response = await _httpClient.SendAsync(hrm, HttpCompletionOption.ResponseHeadersRead);
             await using var stream = await response.Content.ReadAsStreamAsync();
             using var reader = new StreamReader(stream);
 
@@ -95,6 +96,22 @@ namespace server
             if (lastIndex < content.Length)
             {
                 _sentenceBuffer.Append(content.Substring(lastIndex));
+            }
+        }
+
+        public void Interrupt()
+        {
+            if (hrm != null)
+            {
+                hrm.Dispose();
+            }
+        }
+
+        public void Stop()
+        {
+            if (hrm != null)
+            {
+                hrm.Dispose();
             }
         }
     }

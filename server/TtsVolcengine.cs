@@ -36,7 +36,7 @@ namespace server
                 },
                 user = new User
                 {
-                    uid = "yincheng"
+                    uid = "homai"
                 },
                 audio = new Audio
                 {
