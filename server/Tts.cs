@@ -14,7 +14,7 @@ namespace server
         int SampleRate = 22050;
         string modelPath;
         public IWebSocketConnection client = null;
-        float volume = 1.5f;
+        float volume = 1f;
 
         public Tts()
         {
@@ -35,7 +35,7 @@ namespace server
             config.MaxNumSentences = 1;
             ot = new OfflineTts(config);
             SampleRate = ot.SampleRate;
-            //Console.WriteLine("SampleRate:" + SampleRate);
+            Console.WriteLine("SampleRate:" + SampleRate);
             if (!Directory.Exists(Environment.CurrentDirectory + "/audio"))
             {
                 Directory.CreateDirectory(Environment.CurrentDirectory + "/audio");
