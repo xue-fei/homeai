@@ -24,7 +24,7 @@ namespace server
             config.Model.Matcha.Vocoder = Path.Combine(modelPath, "vocos-22khz-univ.onnx");
             config.Model.Matcha.Lexicon = Path.Combine(modelPath, "lexicon.txt");
             config.Model.Matcha.Tokens = Path.Combine(modelPath, "tokens.txt");
-            config.Model.Matcha.DictDir = Path.Combine(modelPath, "dict"); 
+            config.Model.Matcha.DictDir = Path.Combine(modelPath, "dict");
             config.Model.Matcha.LengthScale = 1f;
             config.Model.NumThreads = 5;
             config.Model.Debug = 0;
@@ -124,7 +124,7 @@ namespace server
         public void Update()
         {
             while (true)
-            { 
+            {
                 if (!stopped)
                 {
                     List<byte> bytesToSend = new List<byte>();
@@ -145,7 +145,14 @@ namespace server
                     }
                     if (bytesToSend.Count > 0 && client != null && client.IsAvailable)
                     {
-                        client.Send(bytesToSend.ToArray());
+                        try
+                        {
+                            client.Send(bytesToSend.ToArray());
+                        }
+                        catch (Exception e)
+                        {
+                            Console.WriteLine(e.Message);
+                        }
                     }
                 }
                 Thread.Sleep(10);
