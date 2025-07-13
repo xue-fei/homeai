@@ -60,9 +60,13 @@ namespace server
         }
 
         void CheckTickTime(object sender, ElapsedEventArgs e)
-        { 
+        {
             if (GetTimeStamp() - lastTickTime > offlineTime)
             {
+                if (client == null)
+                {
+                    return;
+                }
                 client.Close();
                 client = null;
                 tts.UpdateClient(client);

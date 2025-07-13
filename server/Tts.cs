@@ -103,6 +103,9 @@ namespace server
         {
             if (stopped)
             {
+                sendQueue.Clear();
+                sendQueue = new(10240000 * 2);
+                Console.WriteLine("停止生成");
                 return;
             }
             byte[] byteData = new byte[shortData.Length * 2];

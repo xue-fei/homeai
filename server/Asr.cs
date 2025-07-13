@@ -142,8 +142,10 @@ namespace server
             string file = Environment.CurrentDirectory + "/audio/" + DateTime.Now.ToFileTime() + ".wav";
             if (denoisedAudio.SaveToWaveFile(file))
             {
-                byte[] audiobs = File.ReadAllBytes(file);
-                Recognize(audiobs);
+                //byte[] audiobs = File.ReadAllBytes(file);
+                //Recognize(audiobs);
+                float[] audioFs = ReadMono16kWavToFloat(file);
+                Recognize(audioFs);
             }
             else
             {
@@ -151,18 +153,10 @@ namespace server
             }
             denoisedAudio.Dispose();
         }
-
-        private void Recognize(byte[] bytes)
-        {
-            int16Array = new short[bytes.Length / 2];
-            Buffer.BlockCopy(bytes, 0, int16Array, 0, bytes.Length);
-            floatArray = new float[int16Array.Length];
-            for (int i = 0; i < int16Array.Length; i++)
-            {
-                floatArray[i] = int16Array[i] / 32767.0f;
-            }
-            keyword.Recognize(floatArray);
-
+        
+        private void Recognize(float[] floatArray)
+        { 
+            keyword.Recognize(floatArray); 
             offlineStream = recognizer.CreateStream();
             offlineStream.AcceptWaveform(sampleRate, floatArray);
             recognizer.Decode(offlineStream);
@@ -178,6 +172,7 @@ namespace server
                     client.Send(JsonConvert.SerializeObject(textMsg));
                     if (llm != null)
                     {
+                        llm.Interrupt();
                         llm.RequestAsync(result);
                     }
                 }
@@ -211,6 +206,74 @@ namespace server
             {
                 offlineSpeechDenoiser.Dispose();
                 offlineSpeechDenoiser = null;
+            }
+        }
+
+        public float[] ReadMono16kWavToFloat(string filePath)
+        {
+            using (FileStream fs = new FileStream(filePath, FileMode.Open, FileAccess.Read))
+            using (BinaryReader reader = new BinaryReader(fs))
+            {
+                // 读取WAV文件头
+                string riff = new string(reader.ReadChars(4));    // "RIFF"
+                int fileSize = reader.ReadInt32();                // 文件总大小-8
+                string wave = new string(reader.ReadChars(4));    // "WAVE"
+                string fmt = new string(reader.ReadChars(4));     // "fmt "
+                int fmtSize = reader.ReadInt32();                 // fmt块大小（至少16）
+
+                // 读取音频格式信息
+                short audioFormat = reader.ReadInt16();           // 1=PCM
+                short numChannels = reader.ReadInt16();           // 通道数
+                int sampleRate = reader.ReadInt32();              // 采样率
+                int byteRate = reader.ReadInt32();                // 字节率
+                short blockAlign = reader.ReadInt16();            // 块对齐
+                short bitsPerSample = reader.ReadInt16();         // 采样深度
+
+                // 验证文件格式
+                if (riff != "RIFF" || wave != "WAVE" || fmt != "fmt ")
+                    throw new Exception("无效的WAV文件头");
+
+                // 跳过fmt块的额外信息（如果有）
+                if (fmtSize > 16)
+                    reader.ReadBytes(fmtSize - 16);
+
+                // 查找数据块
+                string dataChunkId;
+                do
+                {
+                    dataChunkId = new string(reader.ReadChars(4));
+                    if (dataChunkId != "data")
+                        reader.ReadBytes(reader.ReadInt32()); // 跳过非数据块
+                } while (dataChunkId != "data");
+
+                int dataSize = reader.ReadInt32(); // 数据块大小（字节）
+
+                // 验证音频参数
+                if (audioFormat != 1)
+                    throw new Exception("仅支持PCM格式");
+                if (numChannels != 1)
+                    throw new Exception("仅支持单声道音频");
+                if (sampleRate != 16000)
+                    throw new Exception("仅支持16kHz采样率");
+                if (bitsPerSample != 16)
+                    throw new Exception("仅支持16位采样深度");
+
+                // 读取PCM数据并转换为float
+                int sampleCount = dataSize / 2; // 16位 = 2字节/样本
+                float[] floatData = new float[sampleCount];
+
+                for (int i = 0; i < sampleCount; i++)
+                {
+                    // 小端序读取16位样本
+                    byte lowByte = reader.ReadByte();
+                    byte highByte = reader.ReadByte();
+                    short pcmValue = (short)((highByte << 8) | lowByte);
+
+                    // 将16位PCM值转换为[-1.0, 1.0]范围的float
+                    floatData[i] = pcmValue / 32768.0f;
+                }
+
+                return floatData;
             }
         }
     }
