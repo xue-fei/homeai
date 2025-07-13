@@ -122,6 +122,10 @@ namespace server
                 // 收到code 2时，开始识别
                 if (baseMsg.code == 2)
                 {
+                    if (tts != null)
+                    {
+                        tts.Interrupt();
+                    }
                     if (asr != null)
                     {
                         asr.EndReceive();
@@ -132,11 +136,13 @@ namespace server
 
         private void OnClose(IWebSocketConnection connection)
         {
-            client = connection;
+            if (client == null)
+            {
+                return;
+            }
             client = null;
             tts.UpdateClient(client);
             asr.UpdateClient(client);
-
             Console.WriteLine("下线了");
         }
 

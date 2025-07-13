@@ -141,9 +141,7 @@ namespace server
             denoisedAudio = offlineSpeechDenoiser.Run(floatArray, sampleRate);
             string file = Environment.CurrentDirectory + "/audio/" + DateTime.Now.ToFileTime() + ".wav";
             if (denoisedAudio.SaveToWaveFile(file))
-            {
-                //byte[] audiobs = File.ReadAllBytes(file);
-                //Recognize(audiobs);
+            { 
                 float[] audioFs = ReadMono16kWavToFloat(file);
                 Recognize(audioFs);
             }

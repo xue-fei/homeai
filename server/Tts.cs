@@ -124,7 +124,7 @@ namespace server
         public void Update()
         {
             while (true)
-            {
+            { 
                 if (!stopped)
                 {
                     List<byte> bytesToSend = new List<byte>();
