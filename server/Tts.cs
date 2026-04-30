@@ -18,20 +18,20 @@ namespace server
 
         public Tts()
         {
-            modelPath = Environment.CurrentDirectory + "/matcha-icefall-zh-baker";
+            modelPath = Environment.CurrentDirectory + "/matcha-icefall-zh-en";
             config = new OfflineTtsConfig();
             config.Model.Matcha.AcousticModel = Path.Combine(modelPath, "model-steps-3.onnx");
-            config.Model.Matcha.Vocoder = Path.Combine(modelPath, "vocos-22khz-univ.onnx");
+            config.Model.Matcha.Vocoder = Path.Combine(modelPath, "vocos-16khz-univ.onnx");
             config.Model.Matcha.Lexicon = Path.Combine(modelPath, "lexicon.txt");
             config.Model.Matcha.Tokens = Path.Combine(modelPath, "tokens.txt");
-            config.Model.Matcha.DictDir = Path.Combine(modelPath, "dict");
+            config.Model.Matcha.DataDir = Path.Combine(modelPath, "espeak-ng-data");
             config.Model.Matcha.LengthScale = 1f;
             config.Model.NumThreads = 5;
             config.Model.Debug = 0;
             config.Model.Provider = "cpu";
-            config.RuleFsts = modelPath + "/phone.fst" + ","
-                        + modelPath + "/date.fst" + ","
-                    + modelPath + "/number.fst";
+            config.RuleFsts = modelPath + "/phone-zh.fst" + ","
+                        + modelPath + "/date-zh.fst" + ","
+                    + modelPath + "/number-zh.fst";
             config.MaxNumSentences = 1;
             ot = new OfflineTts(config);
             SampleRate = ot.SampleRate;
