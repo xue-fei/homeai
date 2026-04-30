@@ -114,35 +114,36 @@ namespace server
                 hrm.Dispose();
             }
         }
-    }
 
-    public class Message
-    {
-        public string role { get; set; }
-        public string content { get; set; }
-    }
 
-    public class ChatRequest
-    {
-        public string model { get; set; }
-        public List<Message> messages { get; set; }
-        public bool stream { get; set; } = true;
-        public float temperature { get; set; } = 0.5f;
-        public int max_tokens { get; set; } = 2048;
-    }
+        public class Message
+        {
+            public string role { get; set; }
+            public string content { get; set; }
+        }
 
-    public class Delta
-    {
-        public string content { get; set; }
-    }
+        public class ChatRequest
+        {
+            public string model { get; set; }
+            public List<Message> messages { get; set; }
+            public bool stream { get; set; } = true;
+            public float temperature { get; set; } = 0.5f;
+            public int max_tokens { get; set; } = 2048;
+        }
 
-    public class StreamChoice
-    {
-        public Delta delta { get; set; }
-    }
+        public class Delta
+        {
+            public string content { get; set; }
+        }
 
-    public class StreamResponse
-    {
-        public List<StreamChoice> choices { get; set; }
+        public class StreamChoice
+        {
+            public Delta delta { get; set; }
+        }
+
+        public class StreamResponse
+        {
+            public List<StreamChoice> choices { get; set; }
+        }
     }
 }

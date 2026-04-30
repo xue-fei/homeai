@@ -1,5 +1,6 @@
 ﻿using Fleck;
 using SherpaOnnx;
+using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 
 namespace server
@@ -7,14 +8,24 @@ namespace server
     public class Tts
     {
         OfflineTts ot;
-        OfflineTtsGeneratedAudio otga;
         OfflineTtsConfig config;
-        OfflineTtsCallback otc;
         bool initDone = false;
         int SampleRate = 22050;
         string modelPath;
         public IWebSocketConnection client = null;
         float volume = 1f;
+
+        private ConcurrentQueue<byte> sendQueue = new();
+        private CancellationTokenSource cts = new();
+        private Task generateTask = Task.CompletedTask;
+        private readonly object generateLock = new();
+        private int sendChunkSize = 2048;
+
+        // 播放完毕回调，队列耗尽且生成结束时触发
+        public Action OnPlaybackFinished;
+
+        // 标记当前是否有生成任务正在进行
+        private volatile bool isGenerating = false;
 
         public Tts()
         {
@@ -30,28 +41,27 @@ namespace server
             config.Model.Debug = 0;
             config.Model.Provider = "cpu";
             config.RuleFsts = modelPath + "/phone-zh.fst" + ","
-                        + modelPath + "/date-zh.fst" + ","
-                    + modelPath + "/number-zh.fst";
+                            + modelPath + "/date-zh.fst" + ","
+                            + modelPath + "/number-zh.fst";
             config.MaxNumSentences = 1;
             ot = new OfflineTts(config);
             SampleRate = ot.SampleRate;
             Console.WriteLine("SampleRate:" + SampleRate);
+
             if (!Directory.Exists(Environment.CurrentDirectory + "/audio"))
-            {
                 Directory.CreateDirectory(Environment.CurrentDirectory + "/audio");
-            }
+
             initDone = true;
-            Thread thread = new Thread(Update);
-            thread.Start();
+
+            Thread sendThread = new Thread(SendLoop) { IsBackground = true };
+            sendThread.Start();
         }
 
         public void UpdateClient(IWebSocketConnection connection)
         {
             client = connection;
             if (connection == null)
-            {
                 Interrupt();
-            }
         }
 
         public void Generate(string text, float speed, int speakerId)
@@ -61,118 +71,126 @@ namespace server
                 Console.WriteLine("文字转语音未完成初始化");
                 return;
             }
-            stopped = false;
-            otc = new OfflineTtsCallback(OnAudioData);
-            otga = ot.GenerateWithCallback(text, speed, speakerId, otc);
+
+            lock (generateLock)
+            {
+                // 取消上一个任务
+                if (!cts.IsCancellationRequested)
+                    cts.Cancel();
+
+                try { generateTask.Wait(500); } catch { }
+
+                // 清空队列
+                while (sendQueue.TryDequeue(out _)) { }
+
+                var localCts = new CancellationTokenSource();
+                cts = localCts;
+                isGenerating = true;
+
+                generateTask = Task.Run(() =>
+                {
+                    try
+                    {
+                        OfflineTtsCallback callback = (samples, n) =>
+                            OnAudioData(samples, n, localCts.Token);
+                        ot.GenerateWithCallback(text, speed, speakerId, callback);
+                    }
+                    catch (Exception e)
+                    {
+                        Console.WriteLine("生成异常: " + e.Message);
+                    }
+                    finally
+                    {
+                        isGenerating = false;
+                        // 生成结束后，如果队列也空了就立即通知
+                        if (sendQueue.IsEmpty)
+                            OnPlaybackFinished?.Invoke();
+                    }
+                }, localCts.Token);
+            }
         }
 
-        bool stopped = false;
         /// <summary>
-        /// 打断
+        /// 打断当前生成并清空队列
         /// </summary>
         public void Interrupt()
         {
-            stopped = true;
-            sendQueue.Clear();
-            sendQueue = new(10240000 * 2);
+            lock (generateLock)
+            {
+                if (!cts.IsCancellationRequested)
+                {
+                    cts.Cancel();
+                    Console.WriteLine("[TTS] 已打断生成");
+                }
+
+                try { generateTask.Wait(500); } catch { }
+
+                while (sendQueue.TryDequeue(out _)) { }
+                isGenerating = false;
+            }
         }
 
-        private int OnAudioData(nint samples, int n)
+        private int OnAudioData(nint samples, int n, CancellationToken token)
         {
-            //Console.WriteLine("OnAudioData n:" + n);
-            if (stopped)
+            if (token.IsCancellationRequested)
             {
-                sendQueue.Clear();
-                sendQueue = new(10240000 * 2);
-                Console.WriteLine("停止生成");
-                stopped = false;
+                Console.WriteLine("[TTS] 停止生成（回调中断）");
                 return 0;
             }
+
             float[] floatData = new float[n];
             Marshal.Copy(samples, floatData, 0, n);
-            short[] shortData = new short[n];
+
             for (int i = 0; i < n; i++)
             {
-                shortData[i] = Math.Clamp((short)(floatData[i] * 32767f * volume), short.MinValue, short.MaxValue);
+                short s = (short)Math.Clamp(floatData[i] * 32767f * volume, short.MinValue, short.MaxValue);
+                sendQueue.Enqueue((byte)(s & 0xFF));
+                sendQueue.Enqueue((byte)((s >> 8) & 0xFF));
             }
-            HandleFloatData(shortData);
+
             return n;
         }
 
-        void HandleFloatData(short[] shortData)
+        private void SendLoop()
         {
-            if (stopped)
-            {
-                sendQueue.Clear();
-                sendQueue = new(10240000 * 2);
-                Console.WriteLine("停止生成");
-                return;
-            }
-            byte[] byteData = new byte[shortData.Length * 2];
-            Buffer.BlockCopy(shortData, 0, byteData, 0, byteData.Length);
-            foreach (byte b in byteData)
-            {
-                sendQueue.Enqueue(b);
-            }
-        }
+            var buffer = new List<byte>(sendChunkSize);
 
-        /// <summary>
-        /// 20M的音频数据队列
-        /// </summary>
-        private Queue<byte> sendQueue = new(10240000 * 2);
-        private int count = 2048;
-        public void Update()
-        {
             while (true)
             {
-                if (!stopped)
+                buffer.Clear();
+
+                while (buffer.Count < sendChunkSize && sendQueue.TryDequeue(out byte b))
+                    buffer.Add(b);
+
+                if (buffer.Count > 0)
                 {
-                    List<byte> bytesToSend = new List<byte>();
-                    if (sendQueue.Count >= count)
-                    {
-                        for (int i = 0; i < count; i++)
-                        {
-                            bytesToSend.Add(sendQueue.Dequeue());
-                        }
-                    }
-                    else if (sendQueue.Count > 0)
-                    {
-                        int count = sendQueue.Count;
-                        for (int i = 0; i < count; i++)
-                        {
-                            bytesToSend.Add(sendQueue.Dequeue());
-                        }
-                    }
-                    if (bytesToSend.Count > 0 && client != null && client.IsAvailable)
+                    if (client != null && client.IsAvailable)
                     {
                         try
                         {
-                            client.Send(bytesToSend.ToArray());
+                            client.Send(buffer.ToArray());
                         }
                         catch (Exception e)
                         {
-                            Console.WriteLine(e.Message);
+                            Console.WriteLine("发送异常: " + e.Message);
                         }
                     }
                 }
-                Thread.Sleep(10);
+                else
+                {
+                    // 队列为空且生成已结束，触发播放完毕回调
+                    if (!isGenerating && sendQueue.IsEmpty)
+                        OnPlaybackFinished?.Invoke();
+
+                    Thread.Sleep(10);
+                }
             }
         }
 
         public void Stop()
         {
-            if (ot != null)
-            {
-                ot.Dispose();
-            }
-            if (otc != null)
-            {
-                otc = null;
-            }
-            if (otga != null)
-            {
-                otga.Dispose();
-            }
+            Interrupt();
+            ot?.Dispose();
         }
     }
 }
