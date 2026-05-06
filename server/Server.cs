@@ -51,7 +51,7 @@ namespace server
             client = connection;
             tts.UpdateClient(client);
             asr.UpdateClient(client);
-            Console.WriteLine("上线了");
+            Console.WriteLine("[" + client.ConnectionInfo.ClientIpAddress + "上线了]");
             timer = new Timer(checkRate);
             lastTickTime = GetTimeStamp();
             timer.Elapsed += CheckTickTime;
@@ -68,11 +68,10 @@ namespace server
                     return;
                 }
                 client.Close();
+                Console.WriteLine("[" + client.ConnectionInfo.ClientIpAddress + "下线了]");
                 client = null;
-                tts.UpdateClient(client);
-                asr.UpdateClient(client);
-                Console.WriteLine("下线了");
-
+                tts.UpdateClient(null);
+                asr.UpdateClient(null);
                 timer.Elapsed -= CheckTickTime;
                 timer.Stop();
                 timer.Dispose();
@@ -102,6 +101,11 @@ namespace server
             }
             if (baseMsg != null)
             {
+                // 收到code -1时，连接消息
+                if (baseMsg.code == -1)
+                {
+                    Console.WriteLine(baseMsg.msg);
+                }
                 // 收到code 0时，心跳消息
                 if (baseMsg.code == 0)
                 {
@@ -140,10 +144,10 @@ namespace server
             {
                 return;
             }
+            Console.WriteLine("[" + client.ConnectionInfo.ClientIpAddress + "下线了]");
             client = null;
-            tts.UpdateClient(client);
-            asr.UpdateClient(client);
-            Console.WriteLine("下线了");
+            tts.UpdateClient(null);
+            asr.UpdateClient(null); 
         }
 
         private long GetTimeStamp()

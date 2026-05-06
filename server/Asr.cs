@@ -119,6 +119,8 @@ namespace server
             buffer.Clear();
         }
 
+        string tempFile;
+        float[] denoisedSamples;
         void Denoise(byte[] bytes)
         {
             // 字节数组 → short[] → float[]
@@ -128,24 +130,18 @@ namespace server
 
             float[] floatArray = new float[sampleCount];
             for (int i = 0; i < sampleCount; i++)
+            {
                 floatArray[i] = int16Array[i] / 32767.0f;
-
-            // ✅ 降噪后直接在内存中处理，不再落盘再读取
+            }
             DenoisedAudio denoisedAudio = offlineSpeechDenoiser.Run(floatArray, sampleRate);
-
-            // 将降噪后的 float[] 重采样/直接送识别
-            // DenoisedAudio.Samples 是 float[]，SampleRate 是输出采样率
-            float[] denoisedSamples = denoisedAudio.Samples;
+            denoisedSamples = denoisedAudio.Samples;
             int denoisedRate = denoisedAudio.SampleRate;
-
             denoisedAudio.Dispose();
-
             if (denoisedSamples == null || denoisedSamples.Length == 0)
             {
                 Console.WriteLine("降噪结果为空，跳过识别");
                 return;
             }
-
             Recognize(denoisedSamples, denoisedRate);
         }
 
@@ -154,8 +150,9 @@ namespace server
             // ✅ 关键词检测结果现在被使用
             string kw = keyword.Recognize(floatArray);
             if (!string.IsNullOrEmpty(kw))
+            {
                 Console.WriteLine("检测到关键词: " + kw);
-
+            }
             offlineStream = recognizer.CreateStream();
             offlineStream.AcceptWaveform(rate, floatArray);
             recognizer.Decode(offlineStream);

@@ -49,8 +49,9 @@ namespace server
             Console.WriteLine("SampleRate:" + SampleRate);
 
             if (!Directory.Exists(Environment.CurrentDirectory + "/audio"))
+            {
                 Directory.CreateDirectory(Environment.CurrentDirectory + "/audio");
-
+            }
             initDone = true;
 
             Thread sendThread = new Thread(SendLoop) { IsBackground = true };
@@ -61,7 +62,9 @@ namespace server
         {
             client = connection;
             if (connection == null)
+            {
                 Interrupt();
+            }
         }
 
         public void Generate(string text, float speed, int speakerId)
@@ -76,8 +79,9 @@ namespace server
             {
                 // 取消上一个任务
                 if (!cts.IsCancellationRequested)
+                {
                     cts.Cancel();
-
+                }
                 try { generateTask.Wait(500); } catch { }
 
                 // 清空队列
@@ -104,7 +108,9 @@ namespace server
                         isGenerating = false;
                         // 生成结束后，如果队列也空了就立即通知
                         if (sendQueue.IsEmpty)
+                        {
                             OnPlaybackFinished?.Invoke();
+                        }
                     }
                 }, localCts.Token);
             }
@@ -160,8 +166,9 @@ namespace server
                 buffer.Clear();
 
                 while (buffer.Count < sendChunkSize && sendQueue.TryDequeue(out byte b))
+                {
                     buffer.Add(b);
-
+                }
                 if (buffer.Count > 0)
                 {
                     if (client != null && client.IsAvailable)
@@ -180,8 +187,9 @@ namespace server
                 {
                     // 队列为空且生成已结束，触发播放完毕回调
                     if (!isGenerating && sendQueue.IsEmpty)
+                    {
                         OnPlaybackFinished?.Invoke();
-
+                    }
                     Thread.Sleep(10);
                 }
             }
