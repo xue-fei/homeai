@@ -11,3 +11,4 @@ unity/Temp
 unity/*.sln
 unity/*.csproj
 *.dwlt
+unity/Assets/Temp
