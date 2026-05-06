@@ -2,3 +2,12 @@
 server/.vs
 server/bin
 server/obj
+unity/obj
+unity/.vs
+unity/.vsconfig
+unity/Library
+unity/Logs
+unity/Temp
+unity/*.sln
+unity/*.csproj
+*.dwlt
