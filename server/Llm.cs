@@ -39,8 +39,9 @@ namespace server
             // 初始化对话历史
             chatHistory = new List<Message>();
             if (!string.IsNullOrEmpty(sysTip))
+            {
                 chatHistory.Add(new Message(ChatRole.System, sysTip));
-
+            }
             // 启动 TTS 播放调度线程
             Thread ttsThread = new Thread(TtsPlayLoop) { IsBackground = true };
             ttsThread.Start();
@@ -75,11 +76,14 @@ namespace server
                 }
 
                 if (!ttsQueue.TryDequeue(out string sentence))
+                {
                     continue;
+                }
 
                 if (tts == null)
+                {
                     continue;
-
+                }
                 Console.WriteLine($"[TTS播放] {sentence}");
                 ttsPlaying = true;
 
@@ -137,7 +141,9 @@ namespace server
                     if (string.IsNullOrEmpty(content))
                     {
                         if (response.Done)
+                        {
                             Console.WriteLine("模型回答结束(空内容Done)");
+                        }
                         continue;
                     }
 
@@ -221,7 +227,9 @@ namespace server
         {
             chatHistory.Clear();
             if (!string.IsNullOrEmpty(sysTip))
+            {
                 chatHistory.Add(new Message(ChatRole.System, sysTip));
+            }
         }
 
         public List<Message> GetHistory() => new List<Message>(chatHistory);

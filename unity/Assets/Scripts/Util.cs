@@ -36,4 +36,25 @@ public static class Util
             }
         }
     }
+
+    /// <summary>
+    /// 将 16-bit PCM 字节数组（小端序）转换为 float 数组（范围 -1f ~ 1f）
+    /// </summary>
+    /// <param name="pcmBytes">PCM 原始字节数组，每个采样占 2 字节</param>
+    /// <returns>float 数组，采样值范围 -1.0f 到 1.0f</returns>
+    public static float[] ConvertPCMBytesToFloat(byte[] pcmBytes)
+    {
+        int sampleCount = pcmBytes.Length / 2;
+        float[] floatData = new float[sampleCount];
+
+        for (int i = 0; i < sampleCount; i++)
+        {
+            // 小端序读取：低字节在前，高字节在后
+            short pcmValue = (short)((pcmBytes[i * 2 + 1] << 8) | pcmBytes[i * 2]);
+            // 转换为 float：范围 -32768 ~ 32767 → -1.0f ~ 1.0f
+            floatData[i] = pcmValue / 32768f;
+        }
+
+        return floatData;
+    }
 }
