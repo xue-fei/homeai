@@ -9,6 +9,7 @@ namespace server
     {
         OfflineTts ot;
         OfflineTtsConfig config;
+        OfflineTtsGenerationConfig genConfig;
         bool initDone = false;
         int SampleRate = 22050;
         string modelPath;
@@ -29,20 +30,26 @@ namespace server
 
         public Tts()
         {
-            modelPath = Environment.CurrentDirectory + "/matcha-icefall-zh-en";
+            modelPath = Environment.CurrentDirectory + "/sherpa-onnx-zipvoice-distill-int8-zh-en-emilia";
             config = new OfflineTtsConfig();
-            config.Model.Matcha.AcousticModel = Path.Combine(modelPath, "model-steps-3.onnx");
-            config.Model.Matcha.Vocoder = Path.Combine(modelPath, "vocos-16khz-univ.onnx");
-            config.Model.Matcha.Lexicon = Path.Combine(modelPath, "lexicon.txt");
-            config.Model.Matcha.Tokens = Path.Combine(modelPath, "tokens.txt");
-            config.Model.Matcha.DataDir = Path.Combine(modelPath, "espeak-ng-data");
-            config.Model.Matcha.LengthScale = 1f;
+            config.Model.ZipVoice.Encoder = Path.Combine(modelPath, "encoder.int8.onnx");
+            config.Model.ZipVoice.Decoder = Path.Combine(modelPath, "decoder.int8.onnx");
+            config.Model.ZipVoice.Lexicon = Path.Combine(modelPath, "lexicon.txt");
+            config.Model.ZipVoice.Tokens = Path.Combine(modelPath, "tokens.txt");
+            config.Model.ZipVoice.DataDir = Path.Combine(modelPath, "espeak-ng-data");
+            config.Model.ZipVoice.Vocoder = Path.Combine(modelPath, "vocos_24khz.onnx");
+
+            float[] samples = WavUtility.ReadMono16kWavToFloat(Path.Combine(modelPath, "test_wavs/wanwan.wav"));
+            genConfig = new OfflineTtsGenerationConfig();
+            genConfig.ReferenceAudio = samples;
+            genConfig.ReferenceSampleRate = 16000;
+            genConfig.ReferenceText = "今天我们准备了澳白、拿铁、美式和热牛奶，您想要哪一款，请跟我说。";
+            genConfig.NumSteps = 4;
+            genConfig.Extra["min_char_in_sentence"] = "10";
+
             config.Model.NumThreads = 5;
             config.Model.Debug = 0;
             config.Model.Provider = "cpu";
-            config.RuleFsts = modelPath + "/phone-zh.fst" + ","
-                            + modelPath + "/date-zh.fst" + ","
-                            + modelPath + "/number-zh.fst";
             config.MaxNumSentences = 1;
             ot = new OfflineTts(config);
             SampleRate = ot.SampleRate;
@@ -95,9 +102,10 @@ namespace server
                 {
                     try
                     {
-                        OfflineTtsCallback callback = (samples, n) =>
+                        OfflineTtsCallbackProgressWithArg callback = (samples, n, progress, arg) =>
                             OnAudioData(samples, n, localCts.Token);
-                        ot.GenerateWithCallback(text, speed, speakerId, callback);
+                        ot.GenerateWithConfig(text, genConfig, callback);
+                        //ot.GenerateWithCallback(text, speed, speakerId, callback);
                     }
                     catch (Exception e)
                     {
