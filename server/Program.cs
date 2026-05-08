@@ -1,5 +1,5 @@
 ﻿
-namespace server // Note: actual namespace depends on the project name.
+namespace Server // Note: actual namespace depends on the project name.
 {
     internal class Program
     {

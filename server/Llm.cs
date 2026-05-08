@@ -3,12 +3,13 @@ using System.Text;
 using System.Text.RegularExpressions;
 using OllamaSharp;
 using OllamaSharp.Models.Chat;
+using Server.Tts;
 
-namespace server
+namespace Server
 {
     public class Llm
     {
-        public Tts tts;
+        public TtsZipVoice tts;
         OllamaApiClient ollama;
         List<Message> chatHistory;
         string modelName;

@@ -2,7 +2,7 @@
 using System.Text.RegularExpressions;
 using Newtonsoft.Json;
 
-namespace server
+namespace Server
 {
     public class LlmDeepSeek
     {

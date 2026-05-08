@@ -1,5 +1,5 @@
 ﻿
-namespace server
+namespace Server
 {
     [Serializable]
     public class BaseMsg

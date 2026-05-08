@@ -1,5 +1,5 @@
 ﻿
-namespace server
+namespace Server
 {
     using System.IO;
     using System.Text;

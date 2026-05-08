@@ -2,7 +2,7 @@
 using SherpaOnnx;
 using Fleck;
 
-namespace server
+namespace Server
 {
     public class Asr
     {

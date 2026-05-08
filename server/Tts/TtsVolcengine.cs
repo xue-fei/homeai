@@ -2,7 +2,7 @@
 using System.Text;
 using Newtonsoft.Json;
 
-namespace server
+namespace Server.Tts
 {
     public class TtsVolcengine
     {
@@ -100,8 +100,8 @@ namespace server
         private float BytesToFloat(byte firstByte, byte secondByte)
         {
             short s = BitConverter.IsLittleEndian
-                ? (short)((secondByte << 8) | firstByte)
-                : (short)((firstByte << 8) | secondByte);
+                ? (short)(secondByte << 8 | firstByte)
+                : (short)(firstByte << 8 | secondByte);
             return s / 32768.0F;
         }
 

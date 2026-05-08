@@ -2,14 +2,15 @@
 using Timer = System.Timers.Timer;
 using Newtonsoft.Json;
 using System.Timers;
+using Server.Tts;
 
-namespace server
+namespace Server
 {
     public class Server
     {
         WebSocketServer webSocketServer = null;
         Asr asr = null;
-        Tts tts = null;
+        TtsZipVoice tts = null;
         Llm llm = null;
         IWebSocketConnection client;
         float checkRate = 1000;
@@ -22,7 +23,7 @@ namespace server
             asr = new Asr();
             llm = new Llm();
 
-            tts = new Tts();
+            tts = new TtsZipVoice();
             llm.tts = tts;
             asr.llm = llm;
 

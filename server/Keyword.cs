@@ -1,6 +1,6 @@
 ﻿using SherpaOnnx;
 
-namespace server
+namespace Server
 {
     /// <summary>
     /// 关键字识别
