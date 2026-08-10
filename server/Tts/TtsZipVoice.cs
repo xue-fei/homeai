@@ -91,8 +91,9 @@ namespace Server.Tts
                 }
                 try { generateTask.Wait(500); } catch { }
 
-                // 清空队列
+                // 清空队列和帧缓冲区
                 while (sendQueue.TryDequeue(out _)) { }
+                pcmFrameBuffer.Clear();
 
                 var localCts = new CancellationTokenSource();
                 cts = localCts;
@@ -140,6 +141,7 @@ namespace Server.Tts
                 try { generateTask.Wait(500); } catch { }
 
                 while (sendQueue.TryDequeue(out _)) { }
+                pcmFrameBuffer.Clear();
                 isGenerating = false;
             }
         }
@@ -155,35 +157,144 @@ namespace Server.Tts
             float[] floatData = new float[n];
             Marshal.Copy(samples, floatData, 0, n);
 
+            // 将 float 转为 16-bit PCM 字节
+            byte[] pcmBytes = new byte[n * 2];
             for (int i = 0; i < n; i++)
             {
                 short s = (short)Math.Clamp(floatData[i] * 32767f * volume, short.MinValue, short.MaxValue);
-                sendQueue.Enqueue((byte)(s & 0xFF));
-                sendQueue.Enqueue((byte)(s >> 8 & 0xFF));
+                pcmBytes[i * 2] = (byte)(s & 0xFF);
+                pcmBytes[i * 2 + 1] = (byte)(s >> 8 & 0xFF);
+            }
+
+            // 如果有 Opus 编码器，将 PCM 编码为 Opus 后发送
+            if (opusEncoder != null)
+            {
+                EncodeAndQueueOpus(pcmBytes);
+            }
+            else
+            {
+                // 兼容模式：直接发送原始 PCM
+                for (int i = 0; i < pcmBytes.Length; i++)
+                {
+                    sendQueue.Enqueue(pcmBytes[i]);
+                }
             }
 
             return n;
         }
 
+        private OpusCodec opusEncoder = null;
+        private List<byte> pcmFrameBuffer = new List<byte>();
+        private int opusFrameSize; // 每帧采样数
+
+        /// <summary>
+        /// 启用 Opus 编码（TTS 输出将编码为 Opus 格式发送）
+        /// </summary>
+        public void EnableOpusEncoding()
+        {
+            if (opusEncoder == null)
+            {
+                opusEncoder = new OpusCodec(SampleRate, 1, 24000);
+                opusFrameSize = SampleRate / 50; // 20ms 帧
+                Console.WriteLine($"[TTS] 已启用 Opus 编码，采样率: {SampleRate} Hz");
+            }
+        }
+
+        /// <summary>
+        /// 将 PCM 字节缓冲并编码为 Opus 包，放入发送队列
+        /// </summary>
+        private void EncodeAndQueueOpus(byte[] pcmBytes)
+        {
+            pcmFrameBuffer.AddRange(pcmBytes);
+
+            // 当缓冲区有足够数据时，逐帧编码
+            int frameBytes = opusFrameSize * 2; // 16-bit = 2 bytes per sample
+            while (pcmFrameBuffer.Count >= frameBytes)
+            {
+                byte[] frame = pcmFrameBuffer.GetRange(0, frameBytes).ToArray();
+                pcmFrameBuffer.RemoveRange(0, frameBytes);
+
+                byte[] opusPacket = opusEncoder.Encode(frame);
+                if (opusPacket != null)
+                {
+                    // 先写入 Opus 包长度（2字节，小端序），再写入数据
+                    sendQueue.Enqueue((byte)(opusPacket.Length & 0xFF));
+                    sendQueue.Enqueue((byte)(opusPacket.Length >> 8 & 0xFF));
+                    foreach (byte b in opusPacket)
+                    {
+                        sendQueue.Enqueue(b);
+                    }
+                }
+            }
+        }
+
         private void SendLoop()
         {
-            var buffer = new List<byte>(sendChunkSize);
+            var packetBuffer = new List<byte>();
 
             while (true)
             {
-                buffer.Clear();
+                packetBuffer.Clear();
 
-                while (buffer.Count < sendChunkSize && sendQueue.TryDequeue(out byte b))
+                if (opusEncoder != null)
                 {
-                    buffer.Add(b);
+                    // Opus 模式：读取完整的 Opus 包（2字节长度前缀 + 数据）
+                    int lengthPrefixBytes = 0;
+                    short packetLength = 0;
+
+                    while (lengthPrefixBytes < 2)
+                    {
+                        if (sendQueue.TryDequeue(out byte b))
+                        {
+                            if (lengthPrefixBytes == 0)
+                                packetLength = b;
+                            else
+                                packetLength |= (short)(b << 8);
+                            lengthPrefixBytes++;
+                        }
+                        else
+                        {
+                            Thread.Sleep(1);
+                            if (sendQueue.IsEmpty && !isGenerating)
+                                break;
+                        }
+                    }
+
+                    if (lengthPrefixBytes == 2 && packetLength > 0)
+                    {
+                        int bytesRead = 0;
+                        while (bytesRead < packetLength)
+                        {
+                            if (sendQueue.TryDequeue(out byte b))
+                            {
+                                packetBuffer.Add(b);
+                                bytesRead++;
+                            }
+                            else
+                            {
+                                Thread.Sleep(1);
+                                if (sendQueue.IsEmpty && !isGenerating)
+                                    break;
+                            }
+                        }
+                    }
                 }
-                if (buffer.Count > 0)
+                else
+                {
+                    // PCM 兼容模式：按固定大小分块发送
+                    while (packetBuffer.Count < sendChunkSize && sendQueue.TryDequeue(out byte b))
+                    {
+                        packetBuffer.Add(b);
+                    }
+                }
+
+                if (packetBuffer.Count > 0)
                 {
                     if (client != null && client.IsAvailable)
                     {
                         try
                         {
-                            client.Send(buffer.ToArray());
+                            client.Send(packetBuffer.ToArray());
                         }
                         catch (Exception e)
                         {

@@ -105,9 +105,83 @@ namespace Server
 
         List<byte> buffer = new List<byte>();
 
+        // Opus 解码器
+        private OpusCodec opusCodec = null;
+        private bool isOpusEncoded = false;
+        
+        // Opus 帧解析缓冲区
+        private List<byte> opusParseBuffer = new List<byte>();
+        private bool opusReadingLength = true;
+        private int opusPacketLength = 0;
+
         public void Receive(byte[] bytes)
         {
-            buffer.AddRange(bytes);
+            // 如果是 Opus 编码的数据，先解码为 PCM
+            if (isOpusEncoded)
+            {
+                ParseAndDecodeOpus(bytes);
+            }
+            else
+            {
+                buffer.AddRange(bytes);
+            }
+        }
+
+        /// <summary>
+        /// 解析并解码 Opus 帧数据
+        /// 帧格式: [2字节长度前缀(小端序)] + [Opus数据] 循环
+        /// </summary>
+        private void ParseAndDecodeOpus(byte[] bytes)
+        {
+            opusParseBuffer.AddRange(bytes);
+
+            while (opusParseBuffer.Count > 0)
+            {
+                if (opusReadingLength)
+                {
+                    if (opusParseBuffer.Count < 2)
+                        break;
+
+                    opusPacketLength = opusParseBuffer[0] | (opusParseBuffer[1] << 8);
+                    opusParseBuffer.RemoveRange(0, 2);
+                    opusReadingLength = false;
+                }
+                else
+                {
+                    if (opusParseBuffer.Count < opusPacketLength)
+                        break;
+
+                    byte[] opusPacket = opusParseBuffer.GetRange(0, opusPacketLength).ToArray();
+                    opusParseBuffer.RemoveRange(0, opusPacketLength);
+                    opusReadingLength = true;
+
+                    try
+                    {
+                        byte[] pcmBytes = opusCodec.DecodeToBytes(opusPacket);
+                        if (pcmBytes != null)
+                        {
+                            buffer.AddRange(pcmBytes);
+                        }
+                    }
+                    catch (Exception e)
+                    {
+                        Console.WriteLine("Opus 解码失败: " + e.Message);
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// 启用 Opus 解码（当客户端发送 Opus 编码音频时调用）
+        /// </summary>
+        public void EnableOpusDecoding()
+        {
+            if (!isOpusEncoded)
+            {
+                opusCodec = new OpusCodec(sampleRate, 1, 24000);
+                isOpusEncoded = true;
+                Console.WriteLine("[ASR] 已启用 Opus 解码");
+            }
         }
 
         /// <summary>

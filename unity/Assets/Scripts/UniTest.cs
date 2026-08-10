@@ -25,7 +25,19 @@ public class UniTest : MonoBehaviour
     private Queue<byte> audioDataQueue = new Queue<byte>();   // 存放接收到的 PCM 字节
     private object queueLock = new object();                  // 队列锁（线程安全）
     private bool isPlaying = false;                           // 是否正在播放
-    private const int clipSampleLength = 24000 * 5;           // Clip 长度：5秒 (16kHz采样率)
+    private const int clipSampleLength = 24000 * 5;           // Clip 长度：5秒
+    // -----------------------------------
+
+    // ---------- Opus 编解码相关 ----------
+    private OpusCodec opusEncoder;
+    private OpusCodec opusDecoder;
+    private int opusFrameSize = 320; // 20ms @ 16kHz
+    private List<byte> opusPcmBuffer = new List<byte>(); // PCM 帧缓冲区
+
+    // Opus 解码状态
+    private List<byte> opusDecodeBuffer = new List<byte>();
+    private bool opusDecodeReadingLength = true;
+    private int opusDecodePacketLength = 0;
     // -----------------------------------
 
     // Start is called before the first frame update
@@ -63,6 +75,19 @@ public class UniTest : MonoBehaviour
             Directory.CreateDirectory(tempPath);
         }
 #endif
+
+        // ---------- 初始化 Opus 编解码器 ----------
+        try
+        {
+            opusEncoder = new OpusCodec(16000, 1, 24000);
+            opusDecoder = new OpusCodec(16000, 1, 24000);
+            Debug.Log("[Opus] 编解码器已创建");
+        }
+        catch (Exception e)
+        {
+            Debug.LogError("[Opus] 编解码器创建失败: " + e.Message);
+        }
+        // ----------------------------------------
 
         // ---------- 初始化音频播放器 ----------
         // 添加 AudioSource 组件（如果不存在）
@@ -162,13 +187,112 @@ public class UniTest : MonoBehaviour
             pcmData[i] = (short)(sample * 32767f);
         }
 
-        // 将 short[] 转为 byte[] 并发送
-        byte[] byteBuffer = new byte[pcmData.Length * 2];
-        Buffer.BlockCopy(pcmData, 0, byteBuffer, 0, byteBuffer.Length);
+        // 将 short[] 转为 byte[]
+        byte[] pcmBytes = new byte[pcmData.Length * 2];
+        Buffer.BlockCopy(pcmData, 0, pcmBytes, 0, pcmBytes.Length);
 
         if (ws != null && ws.ReadyState == WebSocketState.Open)
         {
-            ws.SendAsync(byteBuffer);
+            if (opusEncoder != null)
+            {
+                // 使用 Opus 编码发送
+                EncodeAndSendOpus(pcmBytes);
+            }
+            else
+            {
+                // 兼容模式：直接发送 PCM
+                ws.SendAsync(pcmBytes);
+            }
+        }
+    }
+
+    /// <summary>
+    /// 将 PCM 数据缓冲并编码为 Opus 包发送
+    /// </summary>
+    private void EncodeAndSendOpus(byte[] pcmBytes)
+    {
+        opusPcmBuffer.AddRange(pcmBytes);
+
+        int frameBytes = opusFrameSize * 2; // 16-bit = 2 bytes per sample
+        while (opusPcmBuffer.Count >= frameBytes)
+        {
+            byte[] frame = opusPcmBuffer.GetRange(0, frameBytes).ToArray();
+            opusPcmBuffer.RemoveRange(0, frameBytes);
+
+            try
+            {
+                byte[] opusPacket = opusEncoder.Encode(frame);
+                if (opusPacket != null)
+                {
+                    // 合并长度前缀（2字节，小端序）+ Opus 数据，作为单个 WebSocket 帧发送
+                    byte[] frameBuffer = new byte[2 + opusPacket.Length];
+                    frameBuffer[0] = (byte)(opusPacket.Length & 0xFF);
+                    frameBuffer[1] = (byte)(opusPacket.Length >> 8 & 0xFF);
+                    Buffer.BlockCopy(opusPacket, 0, frameBuffer, 2, opusPacket.Length);
+                    ws.SendAsync(frameBuffer);
+                }
+            }
+            catch (Exception e)
+            {
+                Debug.LogError("[Opus] 编码失败: " + e.Message);
+            }
+        }
+    }
+
+    /// <summary>
+    /// 从接收到的数据中解析 Opus 包并解码为 PCM
+    /// </summary>
+    private void DecodeAndQueueOpus(byte[] data)
+    {
+        opusDecodeBuffer.AddRange(data);
+
+        while (opusDecodeBuffer.Count > 0)
+        {
+            if (opusDecodeReadingLength)
+            {
+                if (opusDecodeBuffer.Count < 2)
+                    break;
+
+                opusDecodePacketLength = opusDecodeBuffer[0] | (opusDecodeBuffer[1] << 8);
+                opusDecodeBuffer.RemoveRange(0, 2);
+                opusDecodeReadingLength = false;
+            }
+            else
+            {
+                if (opusDecodeBuffer.Count < opusDecodePacketLength)
+                    break;
+
+                byte[] opusPacket = opusDecodeBuffer.GetRange(0, opusDecodePacketLength).ToArray();
+                opusDecodeBuffer.RemoveRange(0, opusDecodePacketLength);
+                opusDecodeReadingLength = true;
+
+                try
+                {
+                    byte[] pcmBytes = opusDecoder.DecodeToBytes(opusPacket);
+                    if (pcmBytes != null)
+                    {
+                        // 将解码后的 PCM 数据加入播放队列
+                        lock (queueLock)
+                        {
+                            foreach (byte b in pcmBytes)
+                            {
+                                audioDataQueue.Enqueue(b);
+                            }
+                        }
+
+                        // 同时保存到 receiveBuffer（用于保存文件）
+                        float[] floatData = Util.ConvertPCMBytesToFloat(pcmBytes);
+                        if (floatData != null)
+                        {
+                            receiveBuffer.AddRange(floatData);
+                        }
+                    }
+                }
+                catch (Exception e)
+                {
+                    Debug.LogError("[Opus] 解码失败: " + e.Message);
+                }
+            }
         }
     }
 
@@ -182,20 +306,29 @@ public class UniTest : MonoBehaviour
     {
         if (e.IsBinary)
         {
-            // 收到二进制数据（PCM 音频流）
+            // 收到二进制数据（Opus 编码音频）
             byte[] audioBytes = e.RawData;
             if (audioBytes == null || audioBytes.Length == 0)
             {
                 return;
             }
-            receive = Util.ConvertPCMBytesToFloat(audioBytes);
-            receiveBuffer.AddRange(receive);
-            lock (queueLock)
+
+            if (opusDecoder != null)
             {
-                // 将字节数据加入队列
-                foreach (byte b in audioBytes)
+                // 使用 Opus 解码
+                DecodeAndQueueOpus(audioBytes);
+            }
+            else
+            {
+                // 兼容模式：直接处理 PCM
+                receive = Util.ConvertPCMBytesToFloat(audioBytes);
+                receiveBuffer.AddRange(receive);
+                lock (queueLock)
                 {
-                    audioDataQueue.Enqueue(b);
+                    foreach (byte b in audioBytes)
+                    {
+                        audioDataQueue.Enqueue(b);
+                    }
                 }
             }
         }
@@ -225,9 +358,8 @@ public class UniTest : MonoBehaviour
     // 当 Unity 音频引擎需要更多数据时调用
     private void OnAudioRead(float[] data)
     {
-        // data 是需要填充的音频缓冲区，长度为 2 * 采样数（因为双声道？但我们创建的是单声道，所以 data.Length 等于帧数）
-        // data 是 float 数组，范围 -1..1
-        int sampleCount = data.Length;   // 单声道：sampleCount 就是需要填充的采样点数
+        // data 是需要填充的音频缓冲区
+        int sampleCount = data.Length;
 
         // 每帧需要读取 sampleCount 个 float 样本
         for (int i = 0; i < sampleCount; i++)
@@ -280,6 +412,14 @@ public class UniTest : MonoBehaviour
         if (dynamicClip != null)
         {
             Destroy(dynamicClip);
+        }
+        if (opusEncoder != null)
+        {
+            opusEncoder.Dispose();
+        }
+        if (opusDecoder != null)
+        {
+            opusDecoder.Dispose();
         }
     }
 }

@@ -52,6 +52,11 @@ namespace Server
             client = connection;
             tts.UpdateClient(client);
             asr.UpdateClient(client);
+
+            // 启用 Opus 编解码
+            tts.EnableOpusEncoding();
+            asr.EnableOpusDecoding();
+
             Console.WriteLine("[" + client.ConnectionInfo.ClientIpAddress + "上线了]");
             timer = new Timer(checkRate);
             lastTickTime = GetTimeStamp();
