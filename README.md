@@ -13,8 +13,14 @@ https://github.com/k2-fsa/sherpa-onnx/releases/download/punctuation-models/sherp
 matcha-icefall-zh-en   
 https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/matcha-icefall-zh-en.tar.bz2   
   
+sherpa-onnx-zipvoice-distill-int8-zh-en-emilia  
+https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/sherpa-onnx-zipvoice-distill-int8-zh-en-emilia.tar.bz2  
+  
 sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01   
 https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models/sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01.tar.bz2   
+  
+vocos_24khz.onnx  
+https://github.com/k2-fsa/sherpa-onnx/releases/download/vocoder-models/vocos_24khz.onnx   
   
 gtcrn_simple.onnx   
 https://github.com/k2-fsa/sherpa-onnx/releases/download/speech-enhancement-models/gtcrn_simple.onnx   
