@@ -6,6 +6,9 @@ namespace Server
     /// <summary>
     /// Opus 编解码器封装类
     /// 用于将 PCM 音频数据编码为 Opus 格式，以及将 Opus 解码为 PCM
+    /// 
+    /// 注意：为兼容 esp32_opus (libopus) 和 Concentus 版本差异，
+    /// 解码时使用最大帧长（60ms）让解码器自行判断，避免 "buffer too small" 错误
     /// </summary>
     public class OpusCodec
     {
@@ -13,13 +16,18 @@ namespace Server
         private OpusDecoder decoder;
         private int sampleRate;
         private int channels;
-        private int frameSize; // 每帧采样数 (20ms)
+        private int frameSize; // 每帧采样数 (20ms) - 编码用
+        
+        // 解码时使用最大允许帧长，兼容不同 libopus 版本产生的帧长差异
+        // Opus 支持 2.5/5/10/20/40/60ms 帧，60ms @ 16kHz = 960 samples
+        private int maxDecodeFrameSize;
 
         public OpusCodec(int sampleRate = 16000, int channels = 1, int bitrate = 24000)
         {
             this.sampleRate = sampleRate;
             this.channels = channels;
-            this.frameSize = sampleRate / 50; // 20ms 帧 = 采样率/50
+            this.frameSize = sampleRate / 50; // 20ms 帧 = 采样率/50 (编码用 320 @ 16kHz)
+            this.maxDecodeFrameSize = (sampleRate * 60) / 1000; // 60ms 最大帧长 (960 @ 16kHz)
 
             // 创建 Opus 编码器
             encoder = new OpusEncoder(sampleRate, channels, OpusApplication.OPUS_APPLICATION_VOIP);
@@ -82,16 +90,18 @@ namespace Server
 
         /// <summary>
         /// 将 Opus 数据解码为 16-bit PCM short数组
+        /// 
+        /// 关键修复：使用最大帧长 (60ms) 调用 Decode，让解码器根据包内容自行判断实际帧长。
+        /// 如果传入 frame_size=320 (20ms) 但实际包是 40/60ms 帧，会报 "buffer too small"。
+        /// Concentus 内部使用 opus_decode()，返回实际解码的采样数。
         /// </summary>
-        /// <param name="opusBytes">Opus 编码的字节数组</param>
-        /// <returns>解码后的 PCM short数组</returns>
         public short[] Decode(byte[] opusBytes)
         {
             if (opusBytes == null || opusBytes.Length == 0)
                 return null;
 
-            short[] pcmBuffer = new short[frameSize * 6]; // 足够大的缓冲区
-            int decodedSamples = decoder.Decode(opusBytes, 0, opusBytes.Length, pcmBuffer, 0, frameSize, false);
+            short[] pcmBuffer = new short[maxDecodeFrameSize];
+            int decodedSamples = decoder.Decode(opusBytes, 0, opusBytes.Length, pcmBuffer, 0, maxDecodeFrameSize, false);
 
             if (decodedSamples <= 0)
                 return null;
