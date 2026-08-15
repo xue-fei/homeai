@@ -97,6 +97,20 @@ void setup() {
     Serial.println("Opus 解码器已创建");
   }
 
+  // 自测：编码一帧正弦波再解码，验证客户端编解码 roundtrip
+  if (opusEncoder != NULL && opusDecoder != NULL) {
+    short testPcm[OPUS_FRAME_SIZE];
+    for (int i = 0; i < OPUS_FRAME_SIZE; i++)
+      testPcm[i] = (short)(sin(2.0 * PI * 440.0 * i / SAMPLE_RATE) * 12000.0);
+    int testEnc = opus_encode(opusEncoder, testPcm, OPUS_FRAME_SIZE, opusEncodeOutput, OPUS_MAX_PACKET);
+    Serial.printf("[自测] 编码 %d 字节, TOC=0x%02X\n", testEnc, testEnc > 0 ? opusEncodeOutput[0] : 0);
+    if (testEnc > 0) {
+      short testOut[OPUS_FRAME_SIZE];
+      int testDec = opus_decode(opusDecoder, opusEncodeOutput, testEnc, testOut, OPUS_FRAME_SIZE, 0);
+      Serial.printf("[自测] 解码 %d 采样 %s\n", testDec, testDec > 0 ? "OK" : "失败");
+    }
+  }
+
   // 连接Wi-Fi
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) {
@@ -253,6 +267,15 @@ void decodeAndPlayOpus(uint8_t* data, size_t length) {
       
       if (opusDecodeBufferIndex >= 2) {
         opusDecodePacketLength = opusDecodeBuffer[0] | (opusDecodeBuffer[1] << 8);
+        // 越界保护：长度前缀必须 ≤ OPUS_MAX_PACKET，否则说明数据不是合法的 Opus 帧（可能收到原始 PCM）
+        if (opusDecodePacketLength <= 0 || opusDecodePacketLength > OPUS_MAX_PACKET) {
+          Serial.printf("[解码] 非法长度前缀 %d，丢弃并重新同步\n", opusDecodePacketLength);
+          opusDecodePacketLength = 0;
+          opusDecodeReadingLength = true;
+          opusDecodeBufferIndex = 0;
+          // 跳过当前这一帧剩余数据，尝试从下一帧重新同步
+          continue;
+        }
         opusDecodeReadingLength = false;
         opusDecodeBufferIndex = 0;
       }

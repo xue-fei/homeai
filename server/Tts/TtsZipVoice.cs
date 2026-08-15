@@ -2,6 +2,7 @@
 using SherpaOnnx;
 using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
+using Concentus;
 
 namespace Server.Tts
 {
@@ -157,6 +158,22 @@ namespace Server.Tts
             float[] floatData = new float[n];
             Marshal.Copy(samples, floatData, 0, n);
 
+            // 重采样到目标采样率（22050 -> 16000）
+            if (resampler != null)
+            {
+                int inLen = n;
+                float[] resampledOut = new float[n * 2 + 64];
+                int outLen = resampledOut.Length;
+                var inSpan = floatData.AsSpan();
+                var outSpan = resampledOut.AsSpan();
+                resampler.ProcessInterleaved(inSpan, ref inLen, outSpan, ref outLen);
+                // 用重采样后的数据（截取有效长度）
+                float[] resampledData = new float[outLen];
+                Array.Copy(resampledOut, resampledData, outLen);
+                floatData = resampledData;
+                n = outLen;
+            }
+
             // 将 float 转为 16-bit PCM 字节
             byte[] pcmBytes = new byte[n * 2];
             for (int i = 0; i < n; i++)
@@ -186,6 +203,8 @@ namespace Server.Tts
         private OpusCodec opusEncoder = null;
         private List<byte> pcmFrameBuffer = new List<byte>();
         private int opusFrameSize; // 每帧采样数
+        private IResampler resampler = null; // 22050 -> 16000 重采样器
+        private const int TARGET_SAMPLE_RATE = 16000; // 目标采样率（客户端 I2S 播放采样率）
 
         /// <summary>
         /// 启用 Opus 编码（TTS 输出将编码为 Opus 格式发送）
@@ -194,9 +213,16 @@ namespace Server.Tts
         {
             if (opusEncoder == null)
             {
-                opusEncoder = new OpusCodec(SampleRate, 1, 24000);
-                opusFrameSize = SampleRate / 50; // 20ms 帧
-                Console.WriteLine($"[TTS] 已启用 Opus 编码，采样率: {SampleRate} Hz");
+                // Opus 只支持 8/12/16/24/48 kHz，模型输出 22050 非法，需重采样到 16000
+                int targetRate = TARGET_SAMPLE_RATE;
+                if (SampleRate != targetRate)
+                {
+                    resampler = ResamplerFactory.CreateResampler(1, SampleRate, targetRate, 5, Console.Out);
+                    Console.WriteLine($"[TTS] 启用重采样 {SampleRate} -> {targetRate} Hz");
+                }
+                opusEncoder = new OpusCodec(targetRate, 1, 24000);
+                opusFrameSize = targetRate / 50; // 320 samples @ 16kHz
+                Console.WriteLine($"[TTS] 已启用 Opus 编码，采样率: {targetRate} Hz");
             }
         }
 

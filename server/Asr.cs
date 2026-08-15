@@ -1,6 +1,7 @@
 ﻿using Newtonsoft.Json;
 using SherpaOnnx;
 using Fleck;
+using System.Linq;
 
 namespace Server
 {
@@ -166,6 +167,9 @@ namespace Server
                     catch (Exception e)
                     {
                         Console.WriteLine("Opus 解码失败: " + e.Message);
+                        // 诊断：打印收到的 Opus 包（前 16 字节 hex + 长度）
+                        string hex = BitConverter.ToString(opusPacket.Take(Math.Min(opusPacket.Length, 16)).ToArray());
+                        Console.WriteLine($"  [诊断] 包长度={opusPacket.Length}, 前16字节: {hex}");
                     }
                 }
             }
