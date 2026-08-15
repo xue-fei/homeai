@@ -183,10 +183,20 @@ namespace Server.Tts
                 pcmBytes[i * 2 + 1] = (byte)(s >> 8 & 0xFF);
             }
 
-            // 如果有 Opus 编码器，将 PCM 编码为 Opus 后发送
+            // 如果有 Opus 编码器，将 PCM 编码为 Opus 后逐个包发送
             if (opusEncoder != null)
             {
-                EncodeAndQueueOpus(pcmBytes);
+                var opusPackets = new List<byte[]>();
+                EncodeAndQueueOpus(pcmBytes, opusPackets);
+                // 每个 Opus 包单独发送（WebSocket 帧边界 = Opus 包边界，无需额外长度前缀）
+                foreach (var packet in opusPackets)
+                {
+                    if (packet != null && client != null && client.IsAvailable)
+                    {
+                        try { client.Send(packet); }
+                        catch (Exception e) { Console.WriteLine("Opus 包发送异常: " + e.Message); }
+                    }
+                }
             }
             else
             {
@@ -203,38 +213,41 @@ namespace Server.Tts
         private OpusCodec opusEncoder = null;
         private List<byte> pcmFrameBuffer = new List<byte>();
         private int opusFrameSize; // 每帧采样数
-        private IResampler resampler = null; // 22050 -> 16000 重采样器
-        private const int TARGET_SAMPLE_RATE = 16000; // 目标采样率（客户端 I2S 播放采样率）
+        private IResampler resampler = null;
+        // 目标采样率：16000 Hz（全链路统一，ASR 模型要求）
+        private const int TARGET_SAMPLE_RATE = 16000;
 
         /// <summary>
         /// 启用 Opus 编码（TTS 输出将编码为 Opus 格式发送）
+        /// TTS 模型原生采样率为 24000 Hz，需重采样到 16000 Hz 以匹配 ASR/客户端链路
         /// </summary>
         public void EnableOpusEncoding()
         {
             if (opusEncoder == null)
             {
-                // Opus 只支持 8/12/16/24/48 kHz，模型输出 22050 非法，需重采样到 16000
-                int targetRate = TARGET_SAMPLE_RATE;
-                if (SampleRate != targetRate)
+                int targetRate = TARGET_SAMPLE_RATE; // 16000
+                // 模型原生采样率（从日志看实际为 24000，而非硬编码的 22050）
+                int modelRate = SampleRate;
+                if (modelRate != targetRate)
                 {
-                    resampler = ResamplerFactory.CreateResampler(1, SampleRate, targetRate, 5, Console.Out);
-                    Console.WriteLine($"[TTS] 启用重采样 {SampleRate} -> {targetRate} Hz");
+                    resampler = ResamplerFactory.CreateResampler(1, modelRate, targetRate, 5, Console.Out);
+                    Console.WriteLine($"[TTS] 启用重采样 {modelRate} -> {targetRate} Hz");
                 }
                 opusEncoder = new OpusCodec(targetRate, 1, 24000);
                 opusFrameSize = targetRate / 50; // 320 samples @ 16kHz
-                Console.WriteLine($"[TTS] 已启用 Opus 编码，采样率: {targetRate} Hz");
+                Console.WriteLine($"[TTS] 已启用 Opus 编码，采样率: {targetRate} Hz (模型原生: {modelRate} Hz)");
             }
         }
 
         /// <summary>
-        /// 将 PCM 字节缓冲并编码为 Opus 包，放入发送队列
+        /// 将 PCM 字节缓冲并编码为 Opus 包列表（每个包独立，可直接作为 WebSocket 帧发送）
         /// </summary>
-        private void EncodeAndQueueOpus(byte[] pcmBytes)
+        private void EncodeAndQueueOpus(byte[] pcmBytes, List<byte[]> outputPackets)
         {
             pcmFrameBuffer.AddRange(pcmBytes);
+            outputPackets.Clear();
 
-            // 当缓冲区有足够数据时，逐帧编码
-            int frameBytes = opusFrameSize * 2; // 16-bit = 2 bytes per sample
+            int frameBytes = opusFrameSize * 2;
             while (pcmFrameBuffer.Count >= frameBytes)
             {
                 byte[] frame = pcmFrameBuffer.GetRange(0, frameBytes).ToArray();
@@ -243,13 +256,7 @@ namespace Server.Tts
                 byte[] opusPacket = opusEncoder.Encode(frame);
                 if (opusPacket != null)
                 {
-                    // 先写入 Opus 包长度（2字节，小端序），再写入数据
-                    sendQueue.Enqueue((byte)(opusPacket.Length & 0xFF));
-                    sendQueue.Enqueue((byte)(opusPacket.Length >> 8 & 0xFF));
-                    foreach (byte b in opusPacket)
-                    {
-                        sendQueue.Enqueue(b);
-                    }
+                    outputPackets.Add(opusPacket);
                 }
             }
         }
@@ -264,45 +271,10 @@ namespace Server.Tts
 
                 if (opusEncoder != null)
                 {
-                    // Opus 模式：读取完整的 Opus 包（2字节长度前缀 + 数据）
-                    int lengthPrefixBytes = 0;
-                    short packetLength = 0;
-
-                    while (lengthPrefixBytes < 2)
+                    // Opus 模式：每个 Opus 包已从 OnAudioData 直接发送，这里只处理残留在队列中的数据
+                    while (packetBuffer.Count < sendChunkSize && sendQueue.TryDequeue(out byte b))
                     {
-                        if (sendQueue.TryDequeue(out byte b))
-                        {
-                            if (lengthPrefixBytes == 0)
-                                packetLength = b;
-                            else
-                                packetLength |= (short)(b << 8);
-                            lengthPrefixBytes++;
-                        }
-                        else
-                        {
-                            Thread.Sleep(1);
-                            if (sendQueue.IsEmpty && !isGenerating)
-                                break;
-                        }
-                    }
-
-                    if (lengthPrefixBytes == 2 && packetLength > 0)
-                    {
-                        int bytesRead = 0;
-                        while (bytesRead < packetLength)
-                        {
-                            if (sendQueue.TryDequeue(out byte b))
-                            {
-                                packetBuffer.Add(b);
-                                bytesRead++;
-                            }
-                            else
-                            {
-                                Thread.Sleep(1);
-                                if (sendQueue.IsEmpty && !isGenerating)
-                                    break;
-                            }
-                        }
+                        packetBuffer.Add(b);
                     }
                 }
                 else
@@ -330,7 +302,6 @@ namespace Server.Tts
                 }
                 else
                 {
-                    // 队列为空且生成已结束，触发播放完毕回调
                     if (!isGenerating && sendQueue.IsEmpty)
                     {
                         OnPlaybackFinished?.Invoke();

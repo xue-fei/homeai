@@ -29,12 +29,14 @@ const char* websocketPath = "/";
 #define I2S_IN_LRC 5
 #define I2S_IN_DIN 6
 
-// 录音参数配置
+// 全链路统一采样率：16000 Hz
+// ASR 模型要求 16000 Hz，TTS 服务端会重采样 24000→16000
 #define SAMPLE_RATE 16000
 #define SAMPLE_BITS 16
 #define BUFFER_SIZE 1024
 
 // Opus 配置
+#define OPUS_SAMPLE_RATE 16000
 #define OPUS_FRAME_SIZE 320  // 20ms @ 16kHz = 320 samples
 #define OPUS_MAX_PACKET 1275 // Opus 推荐最大包大小
 #define OPUS_BITRATE 24000   // 24kbps - 适合语音
@@ -77,20 +79,20 @@ const long interval = 1000;
 void setup() {
   Serial.begin(115200);
 
-  // 初始化 Opus 编码器
+  // 初始化 Opus 编码器（必须与 TTS 采样率一致 = 24000 Hz）
   int err;
-  opusEncoder = opus_encoder_create(SAMPLE_RATE, 1, OPUS_APPLICATION_VOIP, &err);
+  opusEncoder = opus_encoder_create(OPUS_SAMPLE_RATE, 1, OPUS_APPLICATION_VOIP, &err);
   if (err != OPUS_OK) {
     Serial.printf("Opus 编码器创建失败: %d\n", err);
   } else {
     opus_encoder_ctl(opusEncoder, OPUS_SET_BITRATE(OPUS_BITRATE));
     opus_encoder_ctl(opusEncoder, OPUS_SET_SIGNAL(OPUS_SIGNAL_VOICE));
-    opus_encoder_ctl(opusEncoder, OPUS_SET_COMPLEXITY(0)); // 官方示例用 0，栈/CPU 占用最小，语音识别够用
-    Serial.println("Opus 编码器已创建");
+    opus_encoder_ctl(opusEncoder, OPUS_SET_COMPLEXITY(0));
+    Serial.printf("Opus 编码器已创建 (采样率: %d Hz)\n", OPUS_SAMPLE_RATE);
   }
 
-  // 初始化 Opus 解码器
-  opusDecoder = opus_decoder_create(SAMPLE_RATE, 1, &err);
+  // 初始化 Opus 解码器（必须与 TTS 采样率一致 = 24000 Hz）
+  opusDecoder = opus_decoder_create(OPUS_SAMPLE_RATE, 1, &err);
   if (err != OPUS_OK) {
     Serial.printf("Opus 解码器创建失败: %d\n", err);
   } else {
@@ -141,7 +143,7 @@ void setup() {
   // Initialize I2S for audio output
   i2s_config_t i2s_config_out = {
     .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX),
-    .sample_rate = SAMPLE_RATE,
+    .sample_rate = SAMPLE_RATE,  // 16000 Hz - 全链路统一
     .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
     .channel_format = I2S_CHANNEL_FMT_ONLY_RIGHT,
     .communication_format = (i2s_comm_format_t)(I2S_COMM_FORMAT_STAND_I2S),
@@ -254,51 +256,55 @@ void encodeAndSendOpus(uint8_t* pcmData, size_t length) {
 }
 
 /// 从 WebSocket 接收 Opus 数据并解码播放
+/// 服务端直接发送原始 Opus 包（不带额外长度前缀），WebSocket 帧本身已含长度信息
+void decodeAndPlayOpus(uint8_t* data, size_t length) {
+  if (data == NULL || length == 0) return;
+  
+  if (opusDecoder != NULL) {
+    int decodedSamples = opus_decode(opusDecoder, data, length, pcmOutput, OPUS_FRAME_SIZE * 6, 0);
+    
+    if (decodedSamples > 0) {
+      size_t bytes_written;
+      // 使用有限超时，避免死等
+      i2s_write(I2S_OUT_PORT, pcmOutput, decodedSamples * 2, &bytes_written, pdMS_TO_TICKS(10));
+    }
+  }
+}
+
+// 以下旧的 length-prefix 解析代码已不再使用，保留注释以便参考
+/*
 void decodeAndPlayOpus(uint8_t* data, size_t length) {
   size_t bytesProcessed = 0;
-  
   while (bytesProcessed < length) {
     if (opusDecodeReadingLength) {
-      // 读取长度前缀（2字节）
       size_t bytesToCopy = min((size_t)(2 - opusDecodeBufferIndex), length - bytesProcessed);
       memcpy(opusDecodeBuffer + opusDecodeBufferIndex, data + bytesProcessed, bytesToCopy);
       opusDecodeBufferIndex += bytesToCopy;
       bytesProcessed += bytesToCopy;
-      
       if (opusDecodeBufferIndex >= 2) {
         opusDecodePacketLength = opusDecodeBuffer[0] | (opusDecodeBuffer[1] << 8);
-        // 越界保护：长度前缀必须 ≤ OPUS_MAX_PACKET，否则说明数据不是合法的 Opus 帧（可能收到原始 PCM）
         if (opusDecodePacketLength <= 0 || opusDecodePacketLength > OPUS_MAX_PACKET) {
-          Serial.printf("[解码] 非法长度前缀 %d，丢弃并重新同步\n", opusDecodePacketLength);
           opusDecodePacketLength = 0;
           opusDecodeReadingLength = true;
           opusDecodeBufferIndex = 0;
-          // 跳过当前这一帧剩余数据，尝试从下一帧重新同步
           continue;
         }
         opusDecodeReadingLength = false;
         opusDecodeBufferIndex = 0;
       }
     } else {
-      // 读取 Opus 数据包
       size_t bytesToCopy = min((size_t)(opusDecodePacketLength - opusDecodeBufferIndex), length - bytesProcessed);
       memcpy(opusDecodeBuffer + opusDecodeBufferIndex, data + bytesProcessed, bytesToCopy);
       opusDecodeBufferIndex += bytesToCopy;
       bytesProcessed += bytesToCopy;
-      
       if (opusDecodeBufferIndex >= opusDecodePacketLength) {
-        // 解码 Opus 数据
         if (opusDecoder != NULL) {
           int decodedSamples = opus_decode(opusDecoder, opusDecodeBuffer, opusDecodePacketLength, pcmOutput, OPUS_FRAME_SIZE, 0);
-          
           if (decodedSamples > 0) {
             size_t bytes_written;
-            // 使用有限超时，避免死等
             i2s_write(I2S_OUT_PORT, pcmOutput, decodedSamples * 2, &bytes_written, pdMS_TO_TICKS(10));
           }
         }
-        
-        // 重置状态，准备接收下一个包
         opusDecodeReadingLength = true;
         opusDecodeBufferIndex = 0;
         opusDecodePacketLength = 0;
@@ -306,6 +312,7 @@ void decodeAndPlayOpus(uint8_t* data, size_t length) {
     }
   }
 }
+*/
 
 void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
   switch (type) {
