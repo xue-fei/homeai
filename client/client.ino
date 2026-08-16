@@ -29,15 +29,14 @@ const char* websocketPath = "/";
 #define I2S_IN_LRC 5
 #define I2S_IN_DIN 6
 
-// 全链路统一采样率：16000 Hz
-// ASR 模型要求 16000 Hz，TTS 服务端会重采样 24000→16000
-#define SAMPLE_RATE 16000
+// 全链路统一采样率：24000 Hz（TTS 模型原生采样率）
+#define SAMPLE_RATE 24000
 #define SAMPLE_BITS 16
-#define BUFFER_SIZE 1024
+#define BUFFER_SIZE 1536
 
 // Opus 配置
-#define OPUS_SAMPLE_RATE 16000
-#define OPUS_FRAME_SIZE 320  // 20ms @ 16kHz = 320 samples
+#define OPUS_SAMPLE_RATE 24000
+#define OPUS_FRAME_SIZE 480  // 20ms @ 24kHz = 480 samples
 #define OPUS_MAX_PACKET 1275 // Opus 推荐最大包大小
 #define OPUS_BITRATE 24000   // 24kbps - 适合语音
 
@@ -261,11 +260,19 @@ void decodeAndPlayOpus(uint8_t* data, size_t length) {
   if (data == NULL || length == 0) return;
   
   if (opusDecoder != NULL) {
+    // 诊断：打印前8字节
+    if (length > 0) {
+      Serial.printf("[解码] len=%d 前8字节:", (int)length);
+      for (int i = 0; i < min((int)length, 8); i++) {
+        Serial.printf(" %02X", data[i]);
+      }
+      Serial.println();
+    }
     int decodedSamples = opus_decode(opusDecoder, data, length, pcmOutput, OPUS_FRAME_SIZE * 6, 0);
+    Serial.printf("[解码] opus_decode 返回 %d 采样\n", decodedSamples);
     
     if (decodedSamples > 0) {
       size_t bytes_written;
-      // 使用有限超时，避免死等
       i2s_write(I2S_OUT_PORT, pcmOutput, decodedSamples * 2, &bytes_written, pdMS_TO_TICKS(10));
     }
   }
