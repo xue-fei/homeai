@@ -29,16 +29,16 @@ const char* websocketPath = "/";
 #define I2S_IN_LRC 5
 #define I2S_IN_DIN 6
 
-// 全链路统一采样率：24000 Hz（TTS 模型原生采样率）
-#define SAMPLE_RATE 24000
+// 全链路统一采样率：16000 Hz
+#define SAMPLE_RATE 16000
 #define SAMPLE_BITS 16
 #define BUFFER_SIZE 1536
 
 // Opus 配置
-#define OPUS_SAMPLE_RATE 24000
-#define OPUS_FRAME_SIZE 480  // 20ms @ 24kHz = 480 samples
+#define OPUS_SAMPLE_RATE 16000
+#define OPUS_FRAME_SIZE 320  // 20ms @ 16kHz = 320 samples
 #define OPUS_MAX_PACKET 1275 // Opus 推荐最大包大小
-#define OPUS_BITRATE 24000   // 24kbps - 适合语音
+#define OPUS_BITRATE 16000   // 16kbps - 适合语音 @ 16kHz
 
 // WebSocket客户端
 WiFiClient wifiClient;
@@ -78,7 +78,7 @@ const long interval = 1000;
 void setup() {
   Serial.begin(115200);
 
-  // 初始化 Opus 编码器（必须与 TTS 采样率一致 = 24000 Hz）
+  // 初始化 Opus 编码器（必须与采样率一致 = 16000 Hz）
   int err;
   opusEncoder = opus_encoder_create(OPUS_SAMPLE_RATE, 1, OPUS_APPLICATION_VOIP, &err);
   if (err != OPUS_OK) {
@@ -90,7 +90,7 @@ void setup() {
     Serial.printf("Opus 编码器已创建 (采样率: %d Hz)\n", OPUS_SAMPLE_RATE);
   }
 
-  // 初始化 Opus 解码器（必须与 TTS 采样率一致 = 24000 Hz）
+  // 初始化 Opus 解码器（必须与采样率一致 = 16000 Hz）
   opusDecoder = opus_decoder_create(OPUS_SAMPLE_RATE, 1, &err);
   if (err != OPUS_OK) {
     Serial.printf("Opus 解码器创建失败: %d\n", err);
@@ -144,8 +144,8 @@ void setup() {
     .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX),
     .sample_rate = SAMPLE_RATE,
     .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
-    .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
-    .communication_format = (i2s_comm_format_t)(I2S_COMM_FORMAT_STAND_MSB),
+    .channel_format = I2S_CHANNEL_FMT_ONLY_RIGHT,
+    .communication_format = (i2s_comm_format_t)(I2S_COMM_FORMAT_STAND_I2S),
     .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
     .dma_buf_count = 4,
     .dma_buf_len = 1024,
@@ -273,7 +273,10 @@ void decodeAndPlayOpus(uint8_t* data, size_t length) {
     
     if (decodedSamples > 0) {
       size_t bytes_written;
-      i2s_write(I2S_OUT_PORT, pcmOutput, decodedSamples * 2, &bytes_written, pdMS_TO_TICKS(10));
+      esp_err_t err = i2s_write(I2S_OUT_PORT, pcmOutput, decodedSamples * 2, &bytes_written, pdMS_TO_TICKS(10));
+      if (err != ESP_OK) {
+        Serial.printf("[解码] i2s_write 错误: %d\n", err);
+      }
     }
   }
 }

@@ -22,7 +22,7 @@ namespace Server
         // Opus 支持 2.5/5/10/20/40/60ms 帧，60ms @ 16kHz = 960 samples
         private int maxDecodeFrameSize;
 
-        public OpusCodec(int sampleRate = 16000, int channels = 1, int bitrate = 24000)
+        public OpusCodec(int sampleRate = 16000, int channels = 1, int bitrate = 16000)
         {
             this.sampleRate = sampleRate;
             this.channels = channels;

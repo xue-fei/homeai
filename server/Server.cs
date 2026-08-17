@@ -10,7 +10,7 @@ namespace Server
     {
         WebSocketServer webSocketServer = null;
         Asr asr = null;
-        TtsZipVoice tts = null;
+        TtsMatchaIcefall tts = null;
         Llm llm = null;
         IWebSocketConnection client;
         float checkRate = 1000;
@@ -23,7 +23,7 @@ namespace Server
             asr = new Asr();
             llm = new Llm();
 
-            tts = new TtsZipVoice();
+            tts = new TtsMatchaIcefall();
             llm.tts = tts;
             asr.llm = llm;
 

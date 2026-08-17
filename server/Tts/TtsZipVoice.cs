@@ -214,8 +214,8 @@ namespace Server.Tts
         private List<byte> pcmFrameBuffer = new List<byte>();
         private int opusFrameSize; // 每帧采样数
         private IResampler resampler = null;
-        // 目标采样率：24000 Hz（TTS 模型原生采样率，全链路统一）
-        private const int TARGET_SAMPLE_RATE = 24000;
+        // 目标采样率：16000 Hz（ESP32 I2S 精确时钟，全链路统一）
+        private const int TARGET_SAMPLE_RATE = 16000;
 
         /// <summary>
         /// 启用 Opus 编码（TTS 输出将编码为 Opus 格式发送）

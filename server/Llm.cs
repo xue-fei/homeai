@@ -9,7 +9,7 @@ namespace Server
 {
     public class Llm
     {
-        public TtsZipVoice tts;
+        public TtsMatchaIcefall tts;
         OllamaApiClient ollama;
         List<Message> chatHistory;
         string modelName;
