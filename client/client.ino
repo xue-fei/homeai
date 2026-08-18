@@ -66,8 +66,8 @@ uint8_t frameBuffer[2 + OPUS_MAX_PACKET];
 unsigned long previousMillis = 0;
 const long interval = 1000;
 
-// ========== 环形缓冲区（无 FreeRTOS）==========
-#define PCM_QUEUE_SIZE 10           // 缓存 10 帧（约 200ms）
+// ========== 环形缓冲区（多任务安全）==========
+#define PCM_QUEUE_SIZE 32           // 缓存 32 帧（约 640ms），吸收网络与解码抖动
 #define PCM_FRAME_BYTES (OPUS_FRAME_SIZE * sizeof(short))
 
 // 每个帧存储 PCM 数据（short 数组）
@@ -76,33 +76,57 @@ int pcmWriteIndex = 0;   // 生产者写入位置
 int pcmReadIndex = 0;    // 消费者读取位置
 int pcmCount = 0;        // 当前缓冲区中的帧数
 
-// 播放定时器
-unsigned long lastPlayTime = 0;
-const unsigned long playInterval = 20; // 毫秒 (一帧时长)
+// 临界区自旋锁（跨任务保护环形缓冲区：生产者=解码回调，消费者=播放任务）
+portMUX_TYPE pcmMux = portMUX_INITIALIZER_UNLOCKED;
+
+// 播放任务句柄与欠载（underrun）统计
+static TaskHandle_t playTaskHandle = NULL;
+volatile uint32_t underrunCount = 0;
 
 // ========== 环形缓冲区操作函数（非阻塞，单生产者单消费者）==========
 bool pushPcmFrame(short* frame) {
+  portENTER_CRITICAL(&pcmMux);
   if (pcmCount >= PCM_QUEUE_SIZE) {
+    portEXIT_CRITICAL(&pcmMux);
     return false; // 缓冲区满，丢弃
   }
   memcpy(pcmBuffer[pcmWriteIndex], frame, PCM_FRAME_BYTES);
   pcmWriteIndex = (pcmWriteIndex + 1) % PCM_QUEUE_SIZE;
-  // 使用原子操作更新 count（这里只有一个生产者（解码回调）和一个消费者（主循环），
-  // 且均在同一个 core 上顺序执行，不会并发修改，因此可直接操作）
   pcmCount++;
+  portEXIT_CRITICAL(&pcmMux);
   return true;
 }
 
 bool popPcmFrame(short* outFrame) {
+  portENTER_CRITICAL(&pcmMux);
   if (pcmCount == 0) {
+    portEXIT_CRITICAL(&pcmMux);
     return false; // 缓冲区空
   }
   memcpy(outFrame, pcmBuffer[pcmReadIndex], PCM_FRAME_BYTES);
   pcmReadIndex = (pcmReadIndex + 1) % PCM_QUEUE_SIZE;
   pcmCount--;
+  portEXIT_CRITICAL(&pcmMux);
   return true;
 }
 // ===============================================
+
+/// 播放任务：独立于 loop 运行，用阻塞式 i2s_write 以 I2S 硬件时钟节奏驱动播放，
+/// 从根本上消除软件定时器（millis 轮询）带来的漂移与卡顿。
+void playTask(void* arg) {
+  short pcmFrame[OPUS_FRAME_SIZE];
+  size_t bytes_written = 0;
+  while (true) {
+    bool hasData = popPcmFrame(pcmFrame);
+    if (!hasData) {
+      // 欠载：写一帧静音，保持 I2S DMA 不空，避免爆音/跳跃
+      underrunCount++;
+      memset(pcmFrame, 0, sizeof(pcmFrame));
+    }
+    // 阻塞写：DMA 满时在此等待，播放速率完全由 I2S 硬件时钟决定
+    i2s_write(I2S_OUT_PORT, pcmFrame, sizeof(pcmFrame), &bytes_written, portMAX_DELAY);
+  }
+}
 
 void setup() {
   Serial.begin(115200);
@@ -175,7 +199,7 @@ void setup() {
     .channel_format = I2S_CHANNEL_FMT_ONLY_RIGHT,
     .communication_format = (i2s_comm_format_t)(I2S_COMM_FORMAT_STAND_I2S),
     .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
-    .dma_buf_count = 4,
+    .dma_buf_count = 8,               // 加大 DMA 缓冲（8×1024B ≈ 256ms），吸收抖动
     .dma_buf_len = 1024,
     .use_apll = true,
     .tx_desc_auto_clear = true,
@@ -192,6 +216,9 @@ void setup() {
   i2s_set_pin(I2S_IN_PORT, &pin_config_in);
   i2s_driver_install(I2S_OUT_PORT, &i2s_config_out, 0, NULL);
   i2s_set_pin(I2S_OUT_PORT, &pin_config_out);
+
+  // 创建播放任务（固定在 core 0，与 loop 所在 core 1 分离，避免互相阻塞）
+  xTaskCreatePinnedToCore(playTask, "i2s_play", 8192, NULL, 5, &playTaskHandle, 0);
 
   // 连接WebSocket
   webSocket.begin(websocketServer, websocketPort, websocketPath);
@@ -239,22 +266,11 @@ void loop() {
     }
   }
 
-  // ========== 定时播放（每20ms取一帧）==========
-  if (currentMillis - lastPlayTime >= playInterval) {
-    lastPlayTime = currentMillis;
-    short pcmFrame[OPUS_FRAME_SIZE];
-    bool hasData = popPcmFrame(pcmFrame);
-    if (!hasData) {
-      // 缓冲区空，填充静音
-      memset(pcmFrame, 0, sizeof(pcmFrame));
-    }
-    // 写入 I2S（阻塞最多 10ms，避免因 DMA 满而长时间卡住）
-    size_t bytes_written;
-    esp_err_t err = i2s_write(I2S_OUT_PORT, pcmFrame, sizeof(pcmFrame), &bytes_written, pdMS_TO_TICKS(10));
-    if (err != ESP_OK) {
-      // 写入失败（超时），丢弃此帧（下次继续）
-      // 可增加计数以调试
-    }
+  // 调试统计：每 5 秒打印一次队列水位与欠载次数（验证修复后可删除）
+  static unsigned long lastStatTime = 0;
+  if (currentMillis - lastStatTime >= 5000) {
+    lastStatTime = currentMillis;
+    Serial.printf("[播放] 队列水位=%d/%d 欠载=%u\n", pcmCount, PCM_QUEUE_SIZE, underrunCount);
   }
 
   yield(); // 避免看门狗
