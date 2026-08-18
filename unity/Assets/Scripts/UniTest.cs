@@ -79,8 +79,8 @@ public class UniTest : MonoBehaviour
         // ---------- 初始化 Opus 编解码器 ----------
         try
         {
-            opusEncoder = new OpusCodec(16000, 1, 24000);
-            opusDecoder = new OpusCodec(16000, 1, 24000);
+            opusEncoder = new OpusCodec(16000, 1, 16000);
+            opusDecoder = new OpusCodec(16000, 1, 16000);
             Debug.Log("[Opus] 编解码器已创建");
         }
         catch (Exception e)
@@ -97,9 +97,9 @@ public class UniTest : MonoBehaviour
             audioSource = gameObject.AddComponent<AudioSource>();
         }
         // 创建动态音频剪辑，用于流式播放
-        dynamicClip = AudioClip.Create("StreamAudio", clipSampleLength, 1, 24000, true, OnAudioRead);
+        dynamicClip = AudioClip.Create("StreamAudio", clipSampleLength, 1, 16000, true, OnAudioRead);
         audioSource.clip = dynamicClip;
-        audioSource.loop = true;            
+        audioSource.loop = true;
         // 循环播放以便持续补充数据          
         // --------------------------------- 
     }
@@ -113,7 +113,7 @@ public class UniTest : MonoBehaviour
             if (ws != null && ws.ReadyState == WebSocketState.Open)
             {
                 ws.SendAsync("{\"code\":0,\"message\":\"心跳消息\"}");
-                //Debug.Log("发送心跳消息");
+                Debug.Log("发送心跳消息");
             }
         }
         // 如果已经在播放但队列长时间为空（约1秒），可以自动暂停（可选）
@@ -299,6 +299,7 @@ public class UniTest : MonoBehaviour
     private void OnOpen(object sender, OpenEventArgs e)
     {
         Debug.Log("WS connected!");
+        ws.SendAsync("{\"code\":-1,\"message\":\"unity已连接\"}");
     }
 
     float[] receive;
