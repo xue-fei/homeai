@@ -59,26 +59,55 @@ short opusEncodeInput[OPUS_FRAME_SIZE];
 byte opusEncodeOutput[OPUS_MAX_PACKET];
 int opusEncodeBufferIndex = 0;
 
-// Opus 解码缓冲区
-byte opusDecodeBuffer[OPUS_MAX_PACKET + 2]; // +2 for length prefix
-int opusDecodeBufferIndex = 0;
-int opusDecodePacketLength = 0;
-bool opusDecodeReadingLength = true;
-
-// 解码PCM输出缓冲区 - 移到全局避免栈溢出
-short pcmOutput[OPUS_FRAME_SIZE * 6];
-
-// 发送缓冲区 - 移到全局避免栈溢出
+// 发送缓冲区
 uint8_t frameBuffer[2 + OPUS_MAX_PACKET];
 
 // 心跳相关
 unsigned long previousMillis = 0;
 const long interval = 1000;
 
+// ========== 环形缓冲区（无 FreeRTOS）==========
+#define PCM_QUEUE_SIZE 10           // 缓存 10 帧（约 200ms）
+#define PCM_FRAME_BYTES (OPUS_FRAME_SIZE * sizeof(short))
+
+// 每个帧存储 PCM 数据（short 数组）
+short pcmBuffer[PCM_QUEUE_SIZE][OPUS_FRAME_SIZE];
+int pcmWriteIndex = 0;   // 生产者写入位置
+int pcmReadIndex = 0;    // 消费者读取位置
+int pcmCount = 0;        // 当前缓冲区中的帧数
+
+// 播放定时器
+unsigned long lastPlayTime = 0;
+const unsigned long playInterval = 20; // 毫秒 (一帧时长)
+
+// ========== 环形缓冲区操作函数（非阻塞，单生产者单消费者）==========
+bool pushPcmFrame(short* frame) {
+  if (pcmCount >= PCM_QUEUE_SIZE) {
+    return false; // 缓冲区满，丢弃
+  }
+  memcpy(pcmBuffer[pcmWriteIndex], frame, PCM_FRAME_BYTES);
+  pcmWriteIndex = (pcmWriteIndex + 1) % PCM_QUEUE_SIZE;
+  // 使用原子操作更新 count（这里只有一个生产者（解码回调）和一个消费者（主循环），
+  // 且均在同一个 core 上顺序执行，不会并发修改，因此可直接操作）
+  pcmCount++;
+  return true;
+}
+
+bool popPcmFrame(short* outFrame) {
+  if (pcmCount == 0) {
+    return false; // 缓冲区空
+  }
+  memcpy(outFrame, pcmBuffer[pcmReadIndex], PCM_FRAME_BYTES);
+  pcmReadIndex = (pcmReadIndex + 1) % PCM_QUEUE_SIZE;
+  pcmCount--;
+  return true;
+}
+// ===============================================
+
 void setup() {
   Serial.begin(115200);
 
-  // 初始化 Opus 编码器（必须与采样率一致 = 16000 Hz）
+  // 初始化 Opus 编码器
   int err;
   opusEncoder = opus_encoder_create(OPUS_SAMPLE_RATE, 1, OPUS_APPLICATION_VOIP, &err);
   if (err != OPUS_OK) {
@@ -90,7 +119,7 @@ void setup() {
     Serial.printf("Opus 编码器已创建 (采样率: %d Hz)\n", OPUS_SAMPLE_RATE);
   }
 
-  // 初始化 Opus 解码器（必须与采样率一致 = 16000 Hz）
+  // 初始化 Opus 解码器
   opusDecoder = opus_decoder_create(OPUS_SAMPLE_RATE, 1, &err);
   if (err != OPUS_OK) {
     Serial.printf("Opus 解码器创建失败: %d\n", err);
@@ -98,7 +127,7 @@ void setup() {
     Serial.println("Opus 解码器已创建");
   }
 
-  // 自测：编码一帧正弦波再解码，验证客户端编解码 roundtrip
+  // 自测
   if (opusEncoder != NULL && opusDecoder != NULL) {
     short testPcm[OPUS_FRAME_SIZE];
     for (int i = 0; i < OPUS_FRAME_SIZE; i++)
@@ -120,7 +149,7 @@ void setup() {
   }
   Serial.println("WiFi connected");
 
-  // Initialize I2S for audio input
+  // I2S input
   i2s_config_t i2s_config_in = {
     .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX),
     .sample_rate = SAMPLE_RATE,
@@ -131,7 +160,6 @@ void setup() {
     .dma_buf_count = 4,
     .dma_buf_len = 1024,
   };
-
   i2s_pin_config_t pin_config_in = {
     .bck_io_num = I2S_IN_BCLK,
     .ws_io_num = I2S_IN_LRC,
@@ -139,7 +167,7 @@ void setup() {
     .data_in_num = I2S_IN_DIN
   };
 
-  // Initialize I2S for audio output
+  // I2S output
   i2s_config_t i2s_config_out = {
     .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX),
     .sample_rate = SAMPLE_RATE,
@@ -153,7 +181,6 @@ void setup() {
     .tx_desc_auto_clear = true,
     .fixed_mclk = 256 * SAMPLE_RATE
   };
-
   i2s_pin_config_t pin_config_out = {
     .bck_io_num = I2S_OUT_BCLK,
     .ws_io_num = I2S_OUT_LRC,
@@ -163,197 +190,132 @@ void setup() {
 
   i2s_driver_install(I2S_IN_PORT, &i2s_config_in, 0, NULL);
   i2s_set_pin(I2S_IN_PORT, &pin_config_in);
-
   i2s_driver_install(I2S_OUT_PORT, &i2s_config_out, 0, NULL);
   i2s_set_pin(I2S_OUT_PORT, &pin_config_out);
 
-  // 连接WebSocket服务器
+  // 连接WebSocket
   webSocket.begin(websocketServer, websocketPort, websocketPath);
   webSocket.onEvent(webSocketEvent);
-  
-  // 设置超时时间，避免无限阻塞
   webSocket.setReconnectInterval(5000);
-  
-  //开关按钮为输入开启上拉电阻
+
   pinMode(PIN_BUTTON, INPUT_PULLUP);
 }
 
 void loop() {
-  webSocket.loop();  // 必须调用以处理WebSocket事件
-  
+  webSocket.loop();  // WebSocket 事件处理
+
   unsigned long currentMillis = millis();
-  
-  // 心跳发送
+
+  // 心跳
   if (currentMillis - previousMillis >= interval) {
     previousMillis = currentMillis;
-    // 只在非语音状态下发送心跳
     if (!pressed) {
       webSocket.sendTXT("{\"code\":0,\"message\":\"心跳消息\"}");
     }
   }
-  
-  // 按钮读取（带去抖）
+
+  // 按钮去抖
   bool reading = (digitalRead(PIN_BUTTON) == LOW);
   if (reading != pressed) {
     if (currentMillis - lastDebounceTime > debounceDelay) {
       lastDebounceTime = currentMillis;
       pressed = reading;
-      
       if (pressed) {
-        // 开始语音
         webSocket.sendTXT("{\"code\":1,\"message\":\"开始语音\"}");
       } else {
-        // 结束语音
         webSocket.sendTXT("{\"code\":2,\"message\":\"结束语音\"}");
       }
     }
   }
-  
+
+  // 录音编码发送
   if (pressed) {
     static uint8_t buffer[BUFFER_SIZE];
     size_t bytesRead;
-    
-    // 从I2S读取音频数据 - 使用有限超时
     esp_err_t err = i2s_read(I2S_NUM_0, buffer, BUFFER_SIZE, &bytesRead, pdMS_TO_TICKS(10));
-    (void)err; // 读取失败时忽略，下一轮重试
-    
-    // 将 PCM 数据编码为 Opus 并发送
+    (void)err;
     if (opusEncoder != NULL && bytesRead > 0) {
       encodeAndSendOpus(buffer, bytesRead);
     }
   }
-  
-  yield(); // 让出 CPU，避免饿死 WiFi/系统任务触发看门狗
+
+  // ========== 定时播放（每20ms取一帧）==========
+  if (currentMillis - lastPlayTime >= playInterval) {
+    lastPlayTime = currentMillis;
+    short pcmFrame[OPUS_FRAME_SIZE];
+    bool hasData = popPcmFrame(pcmFrame);
+    if (!hasData) {
+      // 缓冲区空，填充静音
+      memset(pcmFrame, 0, sizeof(pcmFrame));
+    }
+    // 写入 I2S（阻塞最多 10ms，避免因 DMA 满而长时间卡住）
+    size_t bytes_written;
+    esp_err_t err = i2s_write(I2S_OUT_PORT, pcmFrame, sizeof(pcmFrame), &bytes_written, pdMS_TO_TICKS(10));
+    if (err != ESP_OK) {
+      // 写入失败（超时），丢弃此帧（下次继续）
+      // 可增加计数以调试
+    }
+  }
+
+  yield(); // 避免看门狗
 }
 
-/// 将 PCM 缓冲区编码为 Opus 包并发送
+/// 编码并发送 Opus
 void encodeAndSendOpus(uint8_t* pcmData, size_t length) {
   size_t bytesProcessed = 0;
-  
   while (bytesProcessed < length) {
-    // 将字节数据填充到 short 缓冲区
     size_t bytesToCopy = min((size_t)(OPUS_FRAME_SIZE - opusEncodeBufferIndex) * 2, length - bytesProcessed);
     memcpy(((uint8_t*)opusEncodeInput) + opusEncodeBufferIndex * 2, pcmData + bytesProcessed, bytesToCopy);
     opusEncodeBufferIndex += bytesToCopy / 2;
     bytesProcessed += bytesToCopy;
-    
-    // 当缓冲区满一帧时进行编码
     if (opusEncodeBufferIndex >= OPUS_FRAME_SIZE) {
       int encodedBytes = opus_encode(opusEncoder, opusEncodeInput, OPUS_FRAME_SIZE, opusEncodeOutput, OPUS_MAX_PACKET);
-      
       if (encodedBytes > 0) {
-        // 合并长度前缀（2字节，小端序）+ Opus 数据
         frameBuffer[0] = (uint8_t)(encodedBytes & 0xFF);
         frameBuffer[1] = (uint8_t)(encodedBytes >> 8 & 0xFF);
         memcpy(frameBuffer + 2, opusEncodeOutput, encodedBytes);
         webSocket.sendBIN(frameBuffer, 2 + encodedBytes);
       }
-      
       opusEncodeBufferIndex = 0;
     }
   }
 }
 
-/// 从 WebSocket 接收 Opus 数据并解码播放
-/// 服务端直接发送原始 Opus 包（不带额外长度前缀），WebSocket 帧本身已含长度信息
+/// 解码并压入环形缓冲区（不再直接写 I2S）
 void decodeAndPlayOpus(uint8_t* data, size_t length) {
-  if (data == NULL || length == 0) return;
-  
-  if (opusDecoder != NULL) {
-    // 诊断：打印前8字节
-    if (length > 0) {
-      Serial.printf("[解码] len=%d 前8字节:", (int)length);
-      for (int i = 0; i < min((int)length, 8); i++) {
-        Serial.printf(" %02X", data[i]);
-      }
-      Serial.println();
-    }
-    int decodedSamples = opus_decode(opusDecoder, data, length, pcmOutput, OPUS_FRAME_SIZE * 6, 0);
-    Serial.printf("[解码] opus_decode 返回 %d 采样\n", decodedSamples);
-    
-    if (decodedSamples > 0) {
-      size_t bytes_written;
-      esp_err_t err = i2s_write(I2S_OUT_PORT, pcmOutput, decodedSamples * 2, &bytes_written, pdMS_TO_TICKS(10));
-      if (err != ESP_OK) {
-        Serial.printf("[解码] i2s_write 错误: %d\n", err);
-      }
+  if (data == NULL || length == 0 || opusDecoder == NULL) return;
+
+  short pcmFrame[OPUS_FRAME_SIZE];
+  int decodedSamples = opus_decode(opusDecoder, data, length, pcmFrame, OPUS_FRAME_SIZE, 0);
+  if (decodedSamples > 0) {
+    if (!pushPcmFrame(pcmFrame)) {
+      // 缓冲区满，丢弃（可打印统计）
+      // Serial.println("[警告] PCM 队列满，丢弃一帧");
     }
   }
 }
 
-// 以下旧的 length-prefix 解析代码已不再使用，保留注释以便参考
-/*
-void decodeAndPlayOpus(uint8_t* data, size_t length) {
-  size_t bytesProcessed = 0;
-  while (bytesProcessed < length) {
-    if (opusDecodeReadingLength) {
-      size_t bytesToCopy = min((size_t)(2 - opusDecodeBufferIndex), length - bytesProcessed);
-      memcpy(opusDecodeBuffer + opusDecodeBufferIndex, data + bytesProcessed, bytesToCopy);
-      opusDecodeBufferIndex += bytesToCopy;
-      bytesProcessed += bytesToCopy;
-      if (opusDecodeBufferIndex >= 2) {
-        opusDecodePacketLength = opusDecodeBuffer[0] | (opusDecodeBuffer[1] << 8);
-        if (opusDecodePacketLength <= 0 || opusDecodePacketLength > OPUS_MAX_PACKET) {
-          opusDecodePacketLength = 0;
-          opusDecodeReadingLength = true;
-          opusDecodeBufferIndex = 0;
-          continue;
-        }
-        opusDecodeReadingLength = false;
-        opusDecodeBufferIndex = 0;
-      }
-    } else {
-      size_t bytesToCopy = min((size_t)(opusDecodePacketLength - opusDecodeBufferIndex), length - bytesProcessed);
-      memcpy(opusDecodeBuffer + opusDecodeBufferIndex, data + bytesProcessed, bytesToCopy);
-      opusDecodeBufferIndex += bytesToCopy;
-      bytesProcessed += bytesToCopy;
-      if (opusDecodeBufferIndex >= opusDecodePacketLength) {
-        if (opusDecoder != NULL) {
-          int decodedSamples = opus_decode(opusDecoder, opusDecodeBuffer, opusDecodePacketLength, pcmOutput, OPUS_FRAME_SIZE, 0);
-          if (decodedSamples > 0) {
-            size_t bytes_written;
-            i2s_write(I2S_OUT_PORT, pcmOutput, decodedSamples * 2, &bytes_written, pdMS_TO_TICKS(10));
-          }
-        }
-        opusDecodeReadingLength = true;
-        opusDecodeBufferIndex = 0;
-        opusDecodePacketLength = 0;
-      }
-    }
-  }
-}
-*/
-
+// WebSocket 事件回调
 void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
   switch (type) {
     case WStype_DISCONNECTED:
       Serial.println("WebSocket断开连接");
       break;
-
     case WStype_CONNECTED:
       Serial.printf("已连接到服务器: %s\n", payload);
       webSocket.sendTXT("{\"code\":-1,\"message\":\"esp32s3已连接\"}");
       Serial.println(WiFi.localIP());
       break;
-
     case WStype_TEXT:
       Serial.printf("收到文本消息: %s\n", payload);
       break;
-
     case WStype_BIN:
-      if (!pressed) {
-        if (length > 0) {
-          if (opusDecoder != NULL) {
-            decodeAndPlayOpus(payload, length);
-          } else {
-            size_t bytes_written;
-            i2s_write(I2S_OUT_PORT, payload, length, &bytes_written, pdMS_TO_TICKS(10));
-          }
+      if (!pressed) {  // 非录音状态才播放
+        if (length > 0 && opusDecoder != NULL) {
+          decodeAndPlayOpus(payload, length);
         }
       }
-      // 录音状态：忽略服务器发来的音频，不做任何 I2S 操作
       break;
-
     case WStype_ERROR:
       Serial.println("WebSocket通信错误");
       break;

@@ -99,6 +99,7 @@ namespace Server.Tts
 
                 // 清空队列和帧缓冲区
                 while (sendQueue.TryDequeue(out _)) { }
+                while (opusSendQueue.TryDequeue(out _)) { }
                 pcmFrameBuffer.Clear();
 
                 var localCts = new CancellationTokenSource();
@@ -143,6 +144,7 @@ namespace Server.Tts
                 try { generateTask.Wait(500); } catch { }
 
                 while (sendQueue.TryDequeue(out _)) { }
+                while (opusSendQueue.TryDequeue(out _)) { }
                 pcmFrameBuffer.Clear();
                 isGenerating = false;
             }
@@ -187,6 +189,12 @@ namespace Server.Tts
             // 如果有 Opus 编码器，将 PCM 编码为 Opus 后入队（由发送线程按音频速率发送）
             if (opusEncoder != null)
             {
+                // 再次检查取消状态，避免在取消后仍入队
+                if (token.IsCancellationRequested)
+                {
+                    Console.WriteLine("[TTS] 停止生成（回调中断）");
+                    return 0;
+                }
                 var opusPackets = new List<byte[]>();
                 EncodeAndQueueOpus(pcmBytes, opusPackets);
                 foreach (var packet in opusPackets)
@@ -199,11 +207,7 @@ namespace Server.Tts
             }
             else
             {
-                // 兼容模式：直接发送原始 PCM
-                for (int i = 0; i < pcmBytes.Length; i++)
-                {
-                    sendQueue.Enqueue(pcmBytes[i]);
-                }
+                Console.WriteLine("opusEncoder == null");
             }
 
             return n;
@@ -313,7 +317,7 @@ namespace Server.Tts
         private void OpusSendLoop()
         {
             // 每帧时长 = opusFrameSize / TARGET_SAMPLE_RATE 秒 = 320/16000 = 20ms
-            int frameIntervalMs = opusFrameSize * 1000 / TARGET_SAMPLE_RATE -5;
+            int frameIntervalMs = opusFrameSize * 1000 / TARGET_SAMPLE_RATE;
 
             while (opusSendRunning)
             {
