@@ -6,6 +6,15 @@ using Server.Tts;
 
 namespace Server
 {
+    /// <summary>
+    /// WebSocket 服务端
+    ///
+    /// 音频协议（全链路统一，无任何编解码）：
+    ///   上行 : Binary = 16000Hz/16bit/mono 小端裸 PCM
+    ///   下行 : Binary = 同上，固定 640 字节（20ms）一帧
+    ///   控制 : Text   = {"code":n,"msg":"..."}
+    ///          -1 连接  0 心跳  1 开始说话  2 结束说话  99 错误回执
+    /// </summary>
     public class Server
     {
         WebSocketServer webSocketServer = null;
@@ -13,8 +22,10 @@ namespace Server
         TtsMatchaIcefall tts = null;
         Llm llm = null;
         IWebSocketConnection client;
-        float checkRate = 1000;
-        float offlineTime = 3;
+        readonly object clientLock = new object();
+
+        const double checkRate = 1000;
+        const long offlineTime = 10;          // 心跳超时秒数（原 3 秒过于激进，弱网易误断）
         long lastTickTime = 0;
         Timer timer;
 
@@ -29,13 +40,12 @@ namespace Server
 
             Console.WriteLine("tts llm asr ok");
 
-            webSocketServer = new WebSocketServer("ws://192.168.2.177:9999");
-            //webSocketServer.Certificate =
-            //    new System.Security.Cryptography.X509Certificates.X509Certificate2(
-            //        Environment.CurrentDirectory + "/usherpa.xuefei.net.cn.pfx", "xb5ceehg");
-            //webSocketServer.EnabledSslProtocols = System.Security.Authentication.SslProtocols.Tls12; 
+            // 心跳检测定时器全局只建一个，避免每次上线泄漏一个 Timer
+            timer = new Timer(checkRate);
+            timer.Elapsed += CheckTickTime;
+            timer.AutoReset = true;
 
-            //开启监听
+            webSocketServer = new WebSocketServer("ws://172.32.151.240:9999");
             webSocketServer.Start(OnStart);
         }
 
@@ -45,57 +55,76 @@ namespace Server
             connection.OnBinary = bytes => OnBinary(connection, bytes);
             connection.OnMessage = msg => OnMessage(connection, msg);
             connection.OnClose += () => OnClose(connection);
+            connection.OnError = ex => Console.WriteLine("[WS] 连接异常: " + ex.Message);
         }
 
         private void OnOpen(IWebSocketConnection connection)
         {
-            client = connection;
-            tts.UpdateClient(client);
-            asr.UpdateClient(client);
+            lock (clientLock)
+            {
+                // 单客户端模型：新连接进来时把旧连接踢掉，避免两个连接抢同一套 ASR/TTS
+                if (client != null && client != connection && client.IsAvailable)
+                {
+                    Console.WriteLine("[" + client.ConnectionInfo.ClientIpAddress + " 被新连接顶替]");
+                    try { client.Close(); } catch { }
+                }
 
-            // 启用 Opus 编解码
-            tts.EnableOpusEncoding();
-            asr.EnableOpusDecoding();
+                client = connection;
+                tts.UpdateClient(client);
+                asr.UpdateClient(client);
+                asr.ResetBuffer();
 
-            Console.WriteLine("[" + client.ConnectionInfo.ClientIpAddress + "上线了]");
-            timer = new Timer(checkRate);
-            lastTickTime = GetTimeStamp();
-            timer.Elapsed += CheckTickTime;
-            timer.AutoReset = true;
-            timer.Enabled = true;
+                Console.WriteLine("[" + client.ConnectionInfo.ClientIpAddress + "上线了]");
+                lastTickTime = GetTimeStamp();
+                timer.Enabled = true;
+            }
         }
 
         void CheckTickTime(object sender, ElapsedEventArgs e)
         {
-            if (GetTimeStamp() - lastTickTime > offlineTime)
+            IWebSocketConnection toClose = null;
+
+            lock (clientLock)
             {
                 if (client == null)
                 {
+                    timer.Enabled = false;      // 没人在线就停掉轮询，不销毁 Timer
                     return;
                 }
-                client.Close();
-                Console.WriteLine("[" + client.ConnectionInfo.ClientIpAddress + "下线了]");
+
+                if (GetTimeStamp() - lastTickTime <= offlineTime)
+                {
+                    return;
+                }
+
+                Console.WriteLine("[" + client.ConnectionInfo.ClientIpAddress + "心跳超时]");
+                toClose = client;
                 client = null;
                 tts.UpdateClient(null);
                 asr.UpdateClient(null);
-                timer.Elapsed -= CheckTickTime;
-                timer.Stop();
-                timer.Dispose();
+                timer.Enabled = false;
             }
+
+            // Close 放在锁外，避免回调重入死锁
+            try { toClose?.Close(); } catch { }
         }
 
         private void OnBinary(IWebSocketConnection connection, byte[] bytes)
         {
-            client = connection;
-            if (asr != null)
+            // 只接受当前活跃连接的音频，防止旧连接残留数据污染
+            lock (clientLock)
             {
-                asr.Receive(bytes);
+                if (client != connection)
+                {
+                    return;
+                }
+                lastTickTime = GetTimeStamp();   // 音频流本身也算活跃信号
             }
+            asr?.Receive(bytes);
         }
 
         private void OnMessage(IWebSocketConnection connection, string msg)
         {
-            client = connection;
             BaseMsg baseMsg = null;
             try
             {
@@ -103,57 +132,68 @@ namespace Server
             }
             catch (Exception e)
             {
-                Console.WriteLine(e);
+                Console.WriteLine("[WS] 消息解析失败: " + e.Message);
+                return;
             }
-            if (baseMsg != null)
+
+            if (baseMsg == null)
             {
-                // 收到code -1时，连接消息
-                if (baseMsg.code == -1)
+                return;
+            }
+
+            lock (clientLock)
+            {
+                if (client != connection)
                 {
+                    return;
+                }
+                lastTickTime = GetTimeStamp();
+            }
+
+            switch (baseMsg.code)
+            {
+                case -1:
                     Console.WriteLine(baseMsg.msg);
-                }
-                // 收到code 0时，心跳消息
-                if (baseMsg.code == 0)
-                {
-                    lastTickTime = GetTimeStamp();
-                }
-                // 收到code 1时，开始录音
-                if (baseMsg.code == 1)
-                {
-                    if (llm != null)
-                    {
-                        llm.Interrupt();
-                    }
-                    if (tts != null)
-                    {
-                        tts.Interrupt();
-                    }
-                }
-                // 收到code 2时，开始识别
-                if (baseMsg.code == 2)
-                {
-                    if (tts != null)
-                    {
-                        tts.Interrupt();
-                    }
-                    if (asr != null)
-                    {
-                        asr.EndReceive();
-                    }
-                }
+                    break;
+
+                case 0:
+                    // 心跳，时间戳已在上面刷新
+                    break;
+
+                case 1:
+                    // 开始说话：打断上一轮全链路，并清掉 ASR 里的陈旧数据
+                    llm?.Interrupt();
+                    tts?.Interrupt();
+                    asr?.ResetBuffer();
+                    break;
+
+                case 2:
+                    // 结束说话：触发识别
+                    tts?.Interrupt();
+                    asr?.EndReceive();
+                    break;
+
+                default:
+                    Console.WriteLine($"[WS] 未知 code={baseMsg.code}");
+                    break;
             }
         }
 
         private void OnClose(IWebSocketConnection connection)
         {
-            if (client == null)
+            lock (clientLock)
             {
-                return;
+                if (client != connection)
+                {
+                    return;      // 已被新连接顶替，不影响当前活跃会话
+                }
+                Console.WriteLine("[" + connection.ConnectionInfo.ClientIpAddress + "下线了]");
+                client = null;
+                tts.UpdateClient(null);
+                asr.UpdateClient(null);
+                asr.ResetBuffer();
+                timer.Enabled = false;
             }
-            Console.WriteLine("[" + client.ConnectionInfo.ClientIpAddress + "下线了]");
-            client = null;
-            tts.UpdateClient(null);
-            asr.UpdateClient(null); 
         }
 
         private long GetTimeStamp()
@@ -162,17 +202,19 @@ namespace Server
             return Convert.ToInt64(ts.TotalSeconds);
         }
 
-        ~Server()
+        public void Shutdown()
         {
-            if (asr != null)
+            if (timer != null)
             {
-                asr.Stop();
+                timer.Enabled = false;
+                timer.Elapsed -= CheckTickTime;
+                timer.Dispose();
+                timer = null;
             }
-            if (tts != null)
-            {
-                tts.Stop();
-            }
-            webSocketServer.Dispose();
+            asr?.Stop();
+            tts?.Stop();
+            webSocketServer?.Dispose();
+            webSocketServer = null;
         }
     }
 }

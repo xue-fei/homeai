@@ -27,10 +27,13 @@ public static class Util
                                          // 写入data子块
                 writer.Write("data".ToCharArray());
                 writer.Write(data.Length * 2); // 音频数据字节数
-                                               // 写入PCM数据（float转为short）
+                                               // 写入PCM数据（float转为short，先钳位防溢出绕回产生爆音）
                 foreach (float sample in data)
                 {
-                    writer.Write((short)(sample * 32767));
+                    float v = sample;
+                    if (v > 1f) v = 1f;
+                    else if (v < -1f) v = -1f;
+                    writer.Write((short)(v * 32767f));
                 }
                 // 返回填充文件总长度
                 fileStream.Position = 4;

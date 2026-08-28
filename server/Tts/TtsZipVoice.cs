@@ -2,32 +2,48 @@
 using SherpaOnnx;
 using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
-using Concentus;
 
 namespace Server.Tts
 {
+    /// <summary>
+    /// ZipVoice TTS —— 纯 PCM 输出版
+    ///
+    /// 下行协议与 TtsMatchaIcefall 完全一致：
+    /// 16000Hz / 16bit / 单声道 / 小端序裸 PCM，固定 640 字节（20ms）一帧，按音频节拍发送。
+    /// ZipVoice 的 vocoder 通常是 24kHz，因此会启用 PcmResampler 转成 16kHz。
+    /// </summary>
     public class TtsZipVoice
     {
         OfflineTts ot;
         OfflineTtsConfig config;
         OfflineTtsGenerationConfig genConfig;
         bool initDone = false;
-        int SampleRate = 22050;
+        int SampleRate = 0;
         string modelPath;
         public IWebSocketConnection client = null;
         float volume = 1f;
 
-        private ConcurrentQueue<byte> sendQueue = new();
+        private const int TARGET_SAMPLE_RATE = 16000;
+        private const int FRAME_SAMPLES = 320;
+        private const int FRAME_BYTES = FRAME_SAMPLES * 2;
+        private const int MAX_QUEUE_FRAMES = 200;   // 4 秒上限
+
+        private readonly ConcurrentQueue<byte[]> sendQueue = new();
         private CancellationTokenSource cts = new();
         private Task generateTask = Task.CompletedTask;
-        private readonly object generateLock = new();
-        private int sendChunkSize = 2048;
+        private readonly SemaphoreSlim generateGate = new(1, 1);
 
-        // 播放完毕回调，队列耗尽且生成结束时触发
+        private readonly List<byte> pcmFrameBuffer = new List<byte>();
+        private readonly object frameBufferLock = new object();
+
         public Action OnPlaybackFinished;
 
-        // 标记当前是否有生成任务正在进行
         private volatile bool isGenerating = false;
+        private volatile bool sendRunning = true;
+        private Thread sendThread;
+        private bool finishedNotified = true;
+
+        private PcmResampler resampler = null;
 
         public TtsZipVoice()
         {
@@ -54,15 +70,17 @@ namespace Server.Tts
             config.MaxNumSentences = 1;
             ot = new OfflineTts(config);
             SampleRate = ot.SampleRate;
-            Console.WriteLine("SampleRate:" + SampleRate);
+            Console.WriteLine("[TTS] 模型采样率: " + SampleRate);
 
-            if (!Directory.Exists(Environment.CurrentDirectory + "/audio"))
+            if (SampleRate != TARGET_SAMPLE_RATE)
             {
-                Directory.CreateDirectory(Environment.CurrentDirectory + "/audio");
+                resampler = new PcmResampler(SampleRate, TARGET_SAMPLE_RATE);
+                Console.WriteLine($"[TTS] 启用重采样 {SampleRate} -> {TARGET_SAMPLE_RATE} Hz");
             }
+
             initDone = true;
 
-            Thread sendThread = new Thread(SendLoop) { IsBackground = true };
+            sendThread = new Thread(SendLoop) { IsBackground = true, Name = "TtsZipPcmSend" };
             sendThread.Start();
         }
 
@@ -79,26 +97,21 @@ namespace Server.Tts
         {
             if (!initDone)
             {
-                Console.WriteLine("文字转语音未完成初始化");
+                Console.WriteLine("[TTS] 未完成初始化");
                 return;
             }
 
-            lock (generateLock)
+            generateGate.Wait();
+            try
             {
-                // 取消上一个任务
-                if (!cts.IsCancellationRequested)
-                {
-                    cts.Cancel();
-                }
-                try { generateTask.Wait(500); } catch { }
-
-                // 清空队列和帧缓冲区
-                while (sendQueue.TryDequeue(out _)) { }
-                pcmFrameBuffer.Clear();
+                CancelCurrent();
+                ClearBuffers();
+                resampler?.Reset();
 
                 var localCts = new CancellationTokenSource();
                 cts = localCts;
                 isGenerating = true;
+                finishedNotified = false;
 
                 generateTask = Task.Run(() =>
                 {
@@ -107,43 +120,69 @@ namespace Server.Tts
                         OfflineTtsCallbackProgressWithArg callback = (samples, n, progress, arg) =>
                             OnAudioData(samples, n, localCts.Token);
                         ot.GenerateWithConfig(text, genConfig, callback);
-                        //ot.GenerateWithCallback(text, speed, speakerId, callback);
+
+                        if (!localCts.IsCancellationRequested)
+                        {
+                            FlushTailFrame();
+                        }
                     }
                     catch (Exception e)
                     {
-                        Console.WriteLine("生成异常: " + e.Message);
+                        Console.WriteLine("[TTS] 生成异常: " + e.Message);
                     }
                     finally
                     {
                         isGenerating = false;
-                        // 生成结束后，如果队列也空了就立即通知
-                        if (sendQueue.IsEmpty)
-                        {
-                            OnPlaybackFinished?.Invoke();
-                        }
                     }
                 }, localCts.Token);
             }
+            finally
+            {
+                generateGate.Release();
+            }
         }
 
-        /// <summary>
-        /// 打断当前生成并清空队列
-        /// </summary>
         public void Interrupt()
         {
-            lock (generateLock)
+            if (!generateGate.Wait(1000))
             {
-                if (!cts.IsCancellationRequested)
-                {
-                    cts.Cancel();
-                    Console.WriteLine("[TTS] 已打断生成");
-                }
-
-                try { generateTask.Wait(500); } catch { }
-
-                while (sendQueue.TryDequeue(out _)) { }
-                pcmFrameBuffer.Clear();
+                Console.WriteLine("[TTS] 打断时获取锁超时，强制取消");
+                CancelCurrent();
+                ClearBuffers();
                 isGenerating = false;
+                return;
+            }
+
+            try
+            {
+                CancelCurrent();
+                ClearBuffers();
+                isGenerating = false;
+                finishedNotified = true;
+                Console.WriteLine("[TTS] 已打断生成");
+            }
+            finally
+            {
+                generateGate.Release();
+            }
+        }
+
+        private void CancelCurrent()
+        {
+            var local = cts;
+            if (local != null && !local.IsCancellationRequested)
+            {
+                try { local.Cancel(); } catch { }
+            }
+            try { generateTask.Wait(500); } catch { }
+        }
+
+        private void ClearBuffers()
+        {
+            while (sendQueue.TryDequeue(out _)) { }
+            lock (frameBufferLock)
+            {
+                pcmFrameBuffer.Clear();
             }
         }
 
@@ -155,166 +194,125 @@ namespace Server.Tts
                 return 0;
             }
 
+            if (n <= 0)
+            {
+                return 0;
+            }
+
+            int originalN = n;
             float[] floatData = new float[n];
             Marshal.Copy(samples, floatData, 0, n);
 
-            // 重采样到目标采样率（22050 -> 16000）
             if (resampler != null)
             {
-                int inLen = n;
-                float[] resampledOut = new float[n * 2 + 64];
-                int outLen = resampledOut.Length;
-                var inSpan = floatData.AsSpan();
-                var outSpan = resampledOut.AsSpan();
-                resampler.ProcessInterleaved(inSpan, ref inLen, outSpan, ref outLen);
-                // 用重采样后的数据（截取有效长度）
-                float[] resampledData = new float[outLen];
-                Array.Copy(resampledOut, resampledData, outLen);
-                floatData = resampledData;
-                n = outLen;
+                floatData = resampler.Process(floatData, n);
+                n = floatData.Length;
+                if (n == 0)
+                {
+                    return originalN;
+                }
             }
 
-            // 将 float 转为 16-bit PCM 字节
             byte[] pcmBytes = new byte[n * 2];
             for (int i = 0; i < n; i++)
             {
-                short s = (short)Math.Clamp(floatData[i] * 32767f * volume, short.MinValue, short.MaxValue);
+                float v = floatData[i] * volume;
+                if (v > 1f) v = 1f;
+                else if (v < -1f) v = -1f;
+                short s = (short)(v * 32767f);
                 pcmBytes[i * 2] = (byte)(s & 0xFF);
-                pcmBytes[i * 2 + 1] = (byte)(s >> 8 & 0xFF);
+                pcmBytes[i * 2 + 1] = (byte)((s >> 8) & 0xFF);
             }
 
-            // 如果有 Opus 编码器，将 PCM 编码为 Opus 后逐个包发送
-            if (opusEncoder != null)
-            {
-                var opusPackets = new List<byte[]>();
-                EncodeAndQueueOpus(pcmBytes, opusPackets);
-                // 每个 Opus 包单独发送（WebSocket 帧边界 = Opus 包边界，无需额外长度前缀）
-                foreach (var packet in opusPackets)
-                {
-                    if (packet != null && client != null && client.IsAvailable)
-                    {
-                        try { client.Send(packet); }
-                        catch (Exception e) { Console.WriteLine("Opus 包发送异常: " + e.Message); }
-                    }
-                }
-            }
-            else
-            {
-                // 兼容模式：直接发送原始 PCM
-                for (int i = 0; i < pcmBytes.Length; i++)
-                {
-                    sendQueue.Enqueue(pcmBytes[i]);
-                }
-            }
-
-            return n;
+            EnqueueFrames(pcmBytes);
+            return originalN;
         }
 
-        private OpusCodec opusEncoder = null;
-        private List<byte> pcmFrameBuffer = new List<byte>();
-        private int opusFrameSize; // 每帧采样数
-        private IResampler resampler = null;
-        // 目标采样率：16000 Hz（ESP32 I2S 精确时钟，全链路统一）
-        private const int TARGET_SAMPLE_RATE = 16000;
-
-        /// <summary>
-        /// 启用 Opus 编码（TTS 输出将编码为 Opus 格式发送）
-        /// TTS 模型原生采样率为 24000 Hz，需重采样到 16000 Hz 以匹配 ASR/客户端链路
-        /// </summary>
-        public void EnableOpusEncoding()
+        private void EnqueueFrames(byte[] pcmBytes)
         {
-            if (opusEncoder == null)
+            lock (frameBufferLock)
             {
-                int targetRate = TARGET_SAMPLE_RATE; // 16000
-                // 模型原生采样率（从日志看实际为 24000，而非硬编码的 22050）
-                int modelRate = SampleRate;
-                if (modelRate != targetRate)
+                pcmFrameBuffer.AddRange(pcmBytes);
+                while (pcmFrameBuffer.Count >= FRAME_BYTES)
                 {
-                    resampler = ResamplerFactory.CreateResampler(1, modelRate, targetRate, 5, Console.Out);
-                    Console.WriteLine($"[TTS] 启用重采样 {modelRate} -> {targetRate} Hz");
+                    byte[] frame = new byte[FRAME_BYTES];
+                    pcmFrameBuffer.CopyTo(0, frame, 0, FRAME_BYTES);
+                    pcmFrameBuffer.RemoveRange(0, FRAME_BYTES);
+                    EnqueueFrame(frame);
                 }
-                opusEncoder = new OpusCodec(targetRate, 1, 24000);
-                opusFrameSize = targetRate / 50; // 320 samples @ 16kHz
-                Console.WriteLine($"[TTS] 已启用 Opus 编码，采样率: {targetRate} Hz (模型原生: {modelRate} Hz)");
             }
         }
 
-        /// <summary>
-        /// 将 PCM 字节缓冲并编码为 Opus 包列表（每个包独立，可直接作为 WebSocket 帧发送）
-        /// </summary>
-        private void EncodeAndQueueOpus(byte[] pcmBytes, List<byte[]> outputPackets)
+        private void FlushTailFrame()
         {
-            pcmFrameBuffer.AddRange(pcmBytes);
-            outputPackets.Clear();
-
-            int frameBytes = opusFrameSize * 2;
-            while (pcmFrameBuffer.Count >= frameBytes)
+            lock (frameBufferLock)
             {
-                byte[] frame = pcmFrameBuffer.GetRange(0, frameBytes).ToArray();
-                pcmFrameBuffer.RemoveRange(0, frameBytes);
-
-                byte[] opusPacket = opusEncoder.Encode(frame);
-                if (opusPacket != null)
-                {
-                    outputPackets.Add(opusPacket);
-                }
+                if (pcmFrameBuffer.Count == 0) return;
+                byte[] frame = new byte[FRAME_BYTES];
+                int count = Math.Min(pcmFrameBuffer.Count, FRAME_BYTES);
+                pcmFrameBuffer.CopyTo(0, frame, 0, count);
+                pcmFrameBuffer.Clear();
+                EnqueueFrame(frame);
             }
+        }
+
+        private void EnqueueFrame(byte[] frame)
+        {
+            while (sendQueue.Count >= MAX_QUEUE_FRAMES)
+            {
+                if (!sendQueue.TryDequeue(out _)) break;
+            }
+            sendQueue.Enqueue(frame);
         }
 
         private void SendLoop()
         {
-            var packetBuffer = new List<byte>();
+            const int frameIntervalMs = FRAME_SAMPLES * 1000 / TARGET_SAMPLE_RATE; // 20
+            long nextTick = Environment.TickCount64;
 
-            while (true)
+            while (sendRunning)
             {
-                packetBuffer.Clear();
-
-                if (opusEncoder != null)
+                if (sendQueue.TryDequeue(out byte[] frame))
                 {
-                    // Opus 模式：每个 Opus 包已从 OnAudioData 直接发送，这里只处理残留在队列中的数据
-                    while (packetBuffer.Count < sendChunkSize && sendQueue.TryDequeue(out byte b))
+                    var conn = client;
+                    if (conn != null && conn.IsAvailable)
                     {
-                        packetBuffer.Add(b);
+                        try { conn.Send(frame); }
+                        catch (Exception e) { Console.WriteLine("[TTS] 发送异常: " + e.Message); }
+                    }
+
+                    nextTick += frameIntervalMs;
+                    long delay = nextTick - Environment.TickCount64;
+                    if (delay > 0)
+                    {
+                        Thread.Sleep((int)delay);
+                    }
+                    else if (delay < -200)
+                    {
+                        nextTick = Environment.TickCount64;
                     }
                 }
                 else
                 {
-                    // PCM 兼容模式：按固定大小分块发送
-                    while (packetBuffer.Count < sendChunkSize && sendQueue.TryDequeue(out byte b))
+                    if (!isGenerating && !finishedNotified)
                     {
-                        packetBuffer.Add(b);
-                    }
-                }
-
-                if (packetBuffer.Count > 0)
-                {
-                    if (client != null && client.IsAvailable)
-                    {
-                        try
-                        {
-                            client.Send(packetBuffer.ToArray());
-                        }
-                        catch (Exception e)
-                        {
-                            Console.WriteLine("发送异常: " + e.Message);
-                        }
-                    }
-                }
-                else
-                {
-                    if (!isGenerating && sendQueue.IsEmpty)
-                    {
+                        finishedNotified = true;
                         OnPlaybackFinished?.Invoke();
                     }
-                    Thread.Sleep(10);
+                    nextTick = Environment.TickCount64;
+                    Thread.Sleep(5);
                 }
             }
         }
 
         public void Stop()
         {
+            sendRunning = false;
+            sendThread?.Join(500);
             Interrupt();
             ot?.Dispose();
+            ot = null;
+            generateGate.Dispose();
         }
     }
 }

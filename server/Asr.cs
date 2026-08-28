@@ -1,7 +1,6 @@
 ﻿using Newtonsoft.Json;
 using SherpaOnnx;
 using Fleck;
-using System.Linq;
 
 namespace Server
 {
@@ -105,86 +104,28 @@ namespace Server
         }
 
         List<byte> buffer = new List<byte>();
+        private readonly object bufferLock = new object();
 
-        // Opus 解码器
-        private OpusCodec opusCodec = null;
-        private bool isOpusEncoded = false;
-        
-        // Opus 帧解析缓冲区
-        private List<byte> opusParseBuffer = new List<byte>();
-        private bool opusReadingLength = true;
-        private int opusPacketLength = 0;
+        // 上行为 16000Hz / 16bit / 单声道裸 PCM，无编解码、无长度前缀。
+        // 缓冲上限 60 秒，超出丢弃最旧数据，防止长按导致内存无限增长。
+        private const int MaxBufferBytes = 16000 * 2 * 60;
 
         public void Receive(byte[] bytes)
         {
-            // 如果是 Opus 编码的数据，先解码为 PCM
-            if (isOpusEncoded)
+            if (bytes == null || bytes.Length == 0)
             {
-                ParseAndDecodeOpus(bytes);
+                return;
             }
-            else
+
+            lock (bufferLock)
             {
                 buffer.AddRange(bytes);
-            }
-        }
-
-        /// <summary>
-        /// 解析并解码 Opus 帧数据
-        /// 帧格式: [2字节长度前缀(小端序)] + [Opus数据] 循环
-        /// </summary>
-        private void ParseAndDecodeOpus(byte[] bytes)
-        {
-            opusParseBuffer.AddRange(bytes);
-
-            while (opusParseBuffer.Count > 0)
-            {
-                if (opusReadingLength)
+                if (buffer.Count > MaxBufferBytes)
                 {
-                    if (opusParseBuffer.Count < 2)
-                        break;
-
-                    opusPacketLength = opusParseBuffer[0] | (opusParseBuffer[1] << 8);
-                    opusParseBuffer.RemoveRange(0, 2);
-                    opusReadingLength = false;
+                    int overflow = buffer.Count - MaxBufferBytes;
+                    buffer.RemoveRange(0, overflow);
+                    Console.WriteLine($"[ASR] 录音缓冲超过上限，丢弃最旧 {overflow} 字节");
                 }
-                else
-                {
-                    if (opusParseBuffer.Count < opusPacketLength)
-                        break;
-
-                    byte[] opusPacket = opusParseBuffer.GetRange(0, opusPacketLength).ToArray();
-                    opusParseBuffer.RemoveRange(0, opusPacketLength);
-                    opusReadingLength = true;
-
-                    try
-                    {
-                        byte[] pcmBytes = opusCodec.DecodeToBytes(opusPacket);
-                        if (pcmBytes != null)
-                        {
-                            buffer.AddRange(pcmBytes);
-                        }
-                    }
-                    catch (Exception e)
-                    {
-                        Console.WriteLine("Opus 解码失败: " + e.Message);
-                        // 诊断：打印收到的 Opus 包（前 16 字节 hex + 长度）
-                        string hex = BitConverter.ToString(opusPacket.Take(Math.Min(opusPacket.Length, 16)).ToArray());
-                        Console.WriteLine($"  [诊断] 包长度={opusPacket.Length}, 前16字节: {hex}");
-                    }
-                }
-            }
-        }
-
-        /// <summary>
-        /// 启用 Opus 解码（当客户端发送 Opus 编码音频时调用）
-        /// </summary>
-        public void EnableOpusDecoding()
-        {
-            if (!isOpusEncoded)
-            {
-                opusCodec = new OpusCodec(sampleRate, 1, 24000);
-                isOpusEncoded = true;
-                Console.WriteLine("[ASR] 已启用 Opus 解码");
             }
         }
 
@@ -193,23 +134,75 @@ namespace Server
         /// </summary>
         public void EndReceive()
         {
-            Denoise(buffer.ToArray());
-            buffer.Clear();
+            byte[] pcm;
+            lock (bufferLock)
+            {
+                pcm = buffer.ToArray();
+                buffer.Clear();
+            }
+
+            // 至少 100ms 才送识别，过滤误触
+            if (pcm.Length < 16000 * 2 / 10)
+            {
+                Console.WriteLine($"[ASR] 录音过短（{pcm.Length} 字节），忽略");
+                return;
+            }
+
+            try
+            {
+                Denoise(pcm);
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine("[ASR] 识别流程异常: " + e.Message);
+                NotifyError("识别失败");
+            }
         }
 
-        string tempFile;
+        /// <summary>
+        /// 录音开始时清空残留缓冲，避免上一轮数据混入
+        /// </summary>
+        public void ResetBuffer()
+        {
+            lock (bufferLock)
+            {
+                buffer.Clear();
+            }
+        }
+
+        private void NotifyError(string message)
+        {
+            var conn = client;
+            if (conn != null && conn.IsAvailable)
+            {
+                try
+                {
+                    conn.Send(JsonConvert.SerializeObject(new BaseMsg(99, message)));
+                }
+                catch (Exception e)
+                {
+                    Console.WriteLine("[ASR] 错误回执发送失败: " + e.Message);
+                }
+            }
+        }
+
         float[] denoisedSamples;
         void Denoise(byte[] bytes)
         {
-            // 字节数组 → short[] → float[]
-            int sampleCount = bytes.Length / 2;
+            // 裸 PCM（16bit 小端）→ short[] → float[]
+            int sampleCount = bytes.Length / 2;   // 丢掉可能出现的奇数尾字节
+            if (sampleCount == 0)
+            {
+                return;
+            }
+
             short[] int16Array = new short[sampleCount];
-            Buffer.BlockCopy(bytes, 0, int16Array, 0, bytes.Length);
+            Buffer.BlockCopy(bytes, 0, int16Array, 0, sampleCount * 2);
 
             float[] floatArray = new float[sampleCount];
             for (int i = 0; i < sampleCount; i++)
             {
-                floatArray[i] = int16Array[i] / 32767.0f;
+                floatArray[i] = int16Array[i] / 32768.0f;
             }
             DenoisedAudio denoisedAudio = offlineSpeechDenoiser.Run(floatArray, sampleRate);
             denoisedSamples = denoisedAudio.Samples;
@@ -225,7 +218,6 @@ namespace Server
 
         private void Recognize(float[] floatArray, int rate)
         {
-            // ✅ 关键词检测结果现在被使用
             string kw = keyword.Recognize(floatArray);
             if (!string.IsNullOrEmpty(kw))
             {
@@ -240,22 +232,35 @@ namespace Server
 
             Console.WriteLine("识别结果:" + result);
 
-            if (!string.IsNullOrWhiteSpace(result))
+            if (string.IsNullOrWhiteSpace(result))
             {
-                result = offlinePunctuation.AddPunct(result.ToLower());
+                NotifyError("没有听清，请再说一次");
+                return;
+            }
 
-                if (client != null && client.IsAvailable)
-                {
-                    BaseMsg textMsg = new BaseMsg(1, result);
-                    client.Send(JsonConvert.SerializeObject(textMsg));
+            result = offlinePunctuation.AddPunct(result.ToLower());
 
-                    if (llm != null)
-                    {
-                        // 先打断上一轮（LLM + TTS 全链路）
-                        llm.Interrupt();
-                        llm.RequestAsync(result);
-                    }
-                }
+            var conn = client;
+            if (conn == null || !conn.IsAvailable)
+            {
+                Console.WriteLine("[ASR] 客户端已断开，丢弃识别结果");
+                return;
+            }
+
+            try
+            {
+                conn.Send(JsonConvert.SerializeObject(new BaseMsg(1, result)));
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine("[ASR] 识别结果发送失败: " + e.Message);
+            }
+
+            if (llm != null)
+            {
+                // 先打断上一轮（LLM + TTS 全链路）
+                llm.Interrupt();
+                llm.RequestAsync(result);
             }
         }
 
