@@ -45,7 +45,7 @@ namespace Server
             timer.Elapsed += CheckTickTime;
             timer.AutoReset = true;
 
-            webSocketServer = new WebSocketServer("ws://172.32.151.240:9999");
+            webSocketServer = new WebSocketServer("ws://192.168.2.177:9999");
             webSocketServer.Start(OnStart);
         }
 

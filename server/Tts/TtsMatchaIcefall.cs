@@ -61,7 +61,7 @@ namespace Server.Tts
             modelPath = Environment.CurrentDirectory + "/matcha-icefall-zh-baker";
             config = new OfflineTtsConfig();
             config.Model.Matcha.AcousticModel = Path.Combine(modelPath, "model-steps-3.onnx");
-            config.Model.Matcha.Vocoder = Path.Combine(modelPath, "vocos-16khz-univ.onnx");
+            config.Model.Matcha.Vocoder = Path.Combine(modelPath, "vocos-22khz-univ.onnx");
             config.Model.Matcha.Lexicon = Path.Combine(modelPath, "lexicon.txt");
             config.Model.Matcha.Tokens = Path.Combine(modelPath, "tokens.txt");
             config.Model.Matcha.DictDir = Path.Combine(modelPath, "dict");
