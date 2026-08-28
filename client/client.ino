@@ -54,15 +54,21 @@ const char* websocketPath = "/";
 #define FRAME_BYTES (FRAME_SAMPLES * 2)          // 640 字节
 
 // ================== 播放抖动缓冲（静态内存，绝不动态分配）==================
-#define JITTER_FRAMES 24                         // 24 * 20ms = 480ms 上限（约 15KB 静态 RAM）
-#define PREBUFFER_FRAMES 6                       // 攒够 120ms 才开声
+// 缓冲从 480ms 扩到 1.28s：Wi-Fi 重传 / 路由器排队 / 服务端推理抖动
+// 随便一个都可能造成几百毫秒的空档，480ms 根本吃不住，一欠载就要重新预缓冲，
+// 听感就是"跳一下、顿一下"。静态占用 40KB，ESP32-S3 完全吃得下。
+#define JITTER_FRAMES 64                         // 64 * 20ms = 1280ms 上限（40KB 静态 RAM）
+#define PREBUFFER_FRAMES 10                      // 冷启动攒够 200ms 才开声
+#define RESUME_FRAMES 3                           // 中途欠载后只需 60ms 即可续播（DMA 里还有存货）
 static int16_t jitterBuf[JITTER_FRAMES][FRAME_SAMPLES];
 static int jitterWrite = 0;
 static int jitterRead = 0;
 static int jitterCount = 0;
 static bool playing = false;                     // false = 预缓冲中，true = 正在放音
+static bool everStarted = false;                 // 本轮是否已经开过声（决定用哪个水位）
 static int frameOffset = 0;                      // 当前帧已写入 I2S 的字节数（断点续写）
 static uint32_t dropFrames = 0;                  // 因缓冲满而丢弃的帧数（诊断用）
+static uint32_t underruns = 0;                   // 欠载次数（诊断用）
 
 // 下行 PCM 字节拼帧缓冲（WebSocket 帧边界不保证与 640 字节对齐）
 static uint8_t rxAssemble[FRAME_BYTES];
@@ -110,6 +116,7 @@ static inline void jitterReset() {
   jitterRead = 0;
   jitterCount = 0;
   playing = false;
+  everStarted = false;
   frameOffset = 0;
   rxAssembleLen = 0;
 }
@@ -163,8 +170,8 @@ void setup() {
     .channel_format = I2S_CHANNEL_FMT_ONLY_RIGHT,
     .communication_format = (i2s_comm_format_t)(I2S_COMM_FORMAT_STAND_I2S),
     .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
-    .dma_buf_count = 8,
-    .dma_buf_len = FRAME_SAMPLES,                // 8 * 20ms = 160ms 硬件缓冲
+    .dma_buf_count = 12,
+    .dma_buf_len = FRAME_SAMPLES,                // 12 * 20ms = 240ms 硬件缓冲
     .use_apll = true,
     .tx_desc_auto_clear = true,
     .fixed_mclk = 256 * SAMPLE_RATE
@@ -235,10 +242,12 @@ void loop() {
   // ---------- 堆水位诊断 ----------
   if (now - lastHeapReport >= heapReportInterval) {
     lastHeapReport = now;
-    Serial.printf("[诊断] freeHeap=%u minHeap=%u 缓冲帧=%d 丢帧=%lu 状态=%s\n",
+    Serial.printf("[诊断] freeHeap=%u minHeap=%u 缓冲帧=%d/%d 丢帧=%lu 欠载=%lu 状态=%s\n",
                   (unsigned)ESP.getFreeHeap(),
                   (unsigned)ESP.getMinFreeHeap(),
-                  jitterCount, (unsigned long)dropFrames,
+                  jitterCount, JITTER_FRAMES,
+                  (unsigned long)dropFrames,
+                  (unsigned long)underruns,
                   playing ? "放音" : "预缓冲");
   }
 }
@@ -309,17 +318,24 @@ void flushTxBuffer() {
 void pumpPlayback() {
   if (pressed) return;                           // 录音期间不放音
 
-  // 预缓冲：攒够再开声，避免一开口就欠载爆音
+  // 预缓冲：攒够再开声，避免一开口就欠载爆音。
+  // 冷启动用较高水位（200ms），中途短暂欠载后用低水位（60ms）快速续播 ——
+  // 因为此时 I2S DMA 里还残留着 100ms 以上未播完的数据，
+  // 用高水位干等反而会把 DMA 放空，那才是真正的断音。
   if (!playing) {
-    if (jitterCount < PREBUFFER_FRAMES) return;
+    int need = everStarted ? RESUME_FRAMES : PREBUFFER_FRAMES;
+    if (jitterCount < need) return;
     playing = true;
+    everStarted = true;
   }
 
-  // 每轮最多推 4 帧，避免单次循环占用过久饿死 webSocket.loop()
-  for (int i = 0; i < 4; i++) {
+  // 每轮尽量把 DMA 灌满（上限 16 帧），DMA 满了自然靠返回值背压退出。
+  // 上限存在的意义只是防止极端情况下饿死 webSocket.loop()。
+  for (int i = 0; i < 16; i++) {
     if (jitterCount == 0) {
       playing = false;                           // 欠载 -> 退回预缓冲，硬件自动输出静音
       frameOffset = 0;
+      underruns++;
       return;
     }
 

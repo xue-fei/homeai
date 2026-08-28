@@ -22,13 +22,6 @@ namespace Server
 
         CancellationTokenSource cts;
 
-        // ── TTS 句子播放队列 ──────────────────────────────────────
-        private ConcurrentQueue<string> ttsQueue = new ConcurrentQueue<string>();
-        private SemaphoreSlim ttsSemaphore = new SemaphoreSlim(0);
-        private volatile bool ttsInterrupted = false;
-        private volatile bool ttsPlaying = false;
-        // ─────────────────────────────────────────────────────────
-
         public Llm(string modelName = "qwen2.5:1.5b", string sysTip = "")
         {
             this.modelName = modelName;
@@ -43,74 +36,21 @@ namespace Server
             {
                 chatHistory.Add(new Message(ChatRole.System, sysTip));
             }
-            // 启动 TTS 播放调度线程
-            Thread ttsThread = new Thread(TtsPlayLoop) { IsBackground = true };
-            ttsThread.Start();
         }
 
         /// <summary>
-        /// 将句子加入 TTS 播放队列
+        /// 把句子直接交给 TTS 排队。
+        ///
+        /// 【为什么不再等上一句播完】
+        /// 原来这里有一个"逐句等播放完毕再合成下一句"的调度线程，导致每句话之间
+        /// 都空出一整段推理时间，ESP32 抖动缓冲被抽干 -> 重新预缓冲 -> 听感就是
+        /// 每句都跳一下、顿一下。
+        /// 现在 TTS 内部自带文本队列 + 连续 PCM 流，句子在 PCM 层无缝拼接，
+        /// 上层只负责尽快把文本喂进去。
         /// </summary>
         private void EnqueueTts(string sentence)
         {
-            ttsQueue.Enqueue(sentence);
-            ttsSemaphore.Release();
-        }
-
-        /// <summary>
-        /// TTS 播放调度循环（独立线程）
-        /// 逐句取出，等上一句播完再播下一句
-        /// </summary>
-        private void TtsPlayLoop()
-        {
-            while (true)
-            {
-                ttsSemaphore.Wait();
-
-                // 被打断：清空队列残留
-                if (ttsInterrupted)
-                {
-                    while (ttsQueue.TryDequeue(out _)) { }
-                    ttsInterrupted = false;
-                    ttsPlaying = false;
-                    continue;
-                }
-
-                if (!ttsQueue.TryDequeue(out string sentence))
-                {
-                    continue;
-                }
-
-                if (tts == null)
-                {
-                    continue;
-                }
-                Console.WriteLine($"[TTS播放] {sentence}");
-                ttsPlaying = true;
-
-                using var playDone = new ManualResetEventSlim(false);
-
-                // 注册播放完毕回调
-                tts.OnPlaybackFinished = () =>
-                {
-                    tts.OnPlaybackFinished = null;
-                    playDone.Set();
-                };
-
-                tts.Generate(sentence, 1f, 0);
-
-                // 等待播放完毕，每 50ms 检查一次是否被打断
-                while (!playDone.Wait(50))
-                {
-                    if (ttsInterrupted)
-                    {
-                        tts.OnPlaybackFinished = null;
-                        break;
-                    }
-                }
-
-                ttsPlaying = false;
-            }
+            tts?.Enqueue(sentence, 1f, 0);
         }
 
         public async void RequestAsync(string prompt)
@@ -214,11 +154,7 @@ namespace Server
             // 2. 清空句子缓冲区
             sentenceBuffer.Clear();
 
-            // 3. 通知 TTS 播放线程清空并停止
-            ttsInterrupted = true;
-            ttsSemaphore.Release(); // 唤醒播放线程执行清空
-
-            // 4. 打断 TTS 硬件层
+            // 3. 打断 TTS（内部会作废文本队列 + PCM 队列）
             tts?.Interrupt();
 
             Console.WriteLine("[Llm] 已打断");
