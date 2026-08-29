@@ -14,4 +14,9 @@
     <PackageReference Include="org.k2fsa.sherpa.onnx" Version="1.13.4" />
   </ItemGroup>
 
+  <!-- music 目录随生成输出，方便直接把 wav 丢进项目里 -->
+  <ItemGroup>
+    <None Include="music\**\*.wav" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

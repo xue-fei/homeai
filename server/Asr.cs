@@ -26,6 +26,13 @@ namespace Server
 
         public Llm llm = null;
 
+        /// <summary>
+        /// 识别结果拦截钩子。返回 true 表示该文本已被处理（例如音乐指令），不再送给 LLM。
+        /// 放在这里而不是 LLM 内部，是为了让「下一首」这类动作指令走几微秒的规则匹配，
+        /// 而不是绕一圈 1.5B 模型 —— 模型会倾向于聊天而不是执行动作。
+        /// </summary>
+        public Func<string, bool> CommandInterceptor = null;
+
         public Asr()
         {
             modelPath = Environment.CurrentDirectory + "/sherpa-onnx-conformer-zh-stateless2-2023-05-23";
@@ -254,6 +261,23 @@ namespace Server
             catch (Exception e)
             {
                 Console.WriteLine("[ASR] 识别结果发送失败: " + e.Message);
+            }
+
+            // 音乐等动作指令优先拦截，命中后不走 LLM
+            if (CommandInterceptor != null)
+            {
+                try
+                {
+                    if (CommandInterceptor(result))
+                    {
+                        Console.WriteLine("[ASR] 已作为指令处理，不送 LLM");
+                        return;
+                    }
+                }
+                catch (Exception e)
+                {
+                    Console.WriteLine("[ASR] 指令拦截异常: " + e.Message);
+                }
             }
 
             if (llm != null)

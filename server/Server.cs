@@ -11,9 +11,12 @@ namespace Server
     ///
     /// 音频协议（全链路统一，无任何编解码）：
     ///   上行 : Binary = 16000Hz/16bit/mono 小端裸 PCM
-    ///   下行 : Binary = 同上，固定 640 字节（20ms）一帧
+    ///   下行 : Binary = 同上，由 PcmStreamer 按 60ms/包 节拍发送
     ///   控制 : Text   = {"code":n,"msg":"..."}
-    ///          -1 连接  0 心跳  1 开始说话  2 结束说话  99 错误回执
+    ///          -1 连接  0 心跳  1 开始说话  2 结束说话  3 音乐控制  99 错误回执
+    ///
+    /// 下行音频只有一个出口 PcmStreamer，TTS 语音与背景音乐互斥共享：
+    /// 语音抢占音乐，语音结束后音乐从被打断处自动接回。
     /// </summary>
     public class Server
     {
@@ -21,6 +24,8 @@ namespace Server
         Asr asr = null;
         TtsMatchaIcefall tts = null;
         Llm llm = null;
+        PcmStreamer streamer = null;
+        MusicPlayer music = null;
         IWebSocketConnection client;
         readonly object clientLock = new object();
 
@@ -31,14 +36,25 @@ namespace Server
 
         public Server()
         {
+            // 下行音频唯一出口，必须先建
+            streamer = new PcmStreamer();
+
             asr = new Asr();
             llm = new Llm();
 
-            tts = new TtsMatchaIcefall();
+            tts = new TtsMatchaIcefall(streamer);
+            music = new MusicPlayer(streamer);
+
             llm.tts = tts;
             asr.llm = llm;
 
-            Console.WriteLine("tts llm asr ok");
+            // 语音开口前让音乐让位；语音说完 PcmStreamer 触发 OnIdle，音乐自己接回
+            tts.OnSpeechStarting = () => music.DuckForSpeech();
+
+            // ASR 结果先过音乐指令解析，命中就不打扰 LLM
+            asr.CommandInterceptor = HandleMusicCommand;
+
+            Console.WriteLine("tts llm asr music ok");
 
             // 心跳检测定时器全局只建一个，避免每次上线泄漏一个 Timer
             timer = new Timer(checkRate);
@@ -70,7 +86,7 @@ namespace Server
                 }
 
                 client = connection;
-                tts.UpdateClient(client);
+                streamer.UpdateClient(client);
                 asr.UpdateClient(client);
                 asr.ResetBuffer();
 
@@ -100,7 +116,8 @@ namespace Server
                 Console.WriteLine("[" + client.ConnectionInfo.ClientIpAddress + "心跳超时]");
                 toClose = client;
                 client = null;
-                tts.UpdateClient(null);
+                music.Stop();
+                streamer.UpdateClient(null);
                 asr.UpdateClient(null);
                 timer.Enabled = false;
             }
@@ -161,9 +178,11 @@ namespace Server
                     break;
 
                 case 1:
-                    // 开始说话：打断上一轮全链路，并清掉 ASR 里的陈旧数据
+                    // 开始说话：打断上一轮全链路，并清掉 ASR 里的陈旧数据。
+                    // 音乐不停，只是让位 —— 用户说完话音乐会自己接回来。
                     llm?.Interrupt();
                     tts?.Interrupt();
+                    music?.DuckForSpeech();
                     asr?.ResetBuffer();
                     break;
 
@@ -173,9 +192,113 @@ namespace Server
                     asr?.EndReceive();
                     break;
 
+                case 3:
+                    // 音乐控制：msg 为指令文本，与语音指令走同一套解析
+                    HandleMusicCommand(baseMsg.msg);
+                    break;
+
                 default:
                     Console.WriteLine($"[WS] 未知 code={baseMsg.code}");
                     break;
+            }
+        }
+
+        /// <summary>
+        /// 处理音乐指令。返回 true 表示已消费（调用方不再送 LLM）。
+        /// 同时服务 ASR 语音指令和客户端 code=3 的显式控制。
+        /// </summary>
+        private bool HandleMusicCommand(string text)
+        {
+            if (music == null || string.IsNullOrWhiteSpace(text)) return false;
+
+            var intent = MusicCommandParser.Parse(text);
+            if (intent.Command == MusicCommand.None) return false;
+
+            switch (intent.Command)
+            {
+                case MusicCommand.Play:
+                    // 音乐要开口，先把可能还在说话的 TTS 停掉，否则两者抢出口
+                    llm?.Interrupt();
+                    if (!music.Play(intent.TrackName))
+                    {
+                        Speak(string.IsNullOrEmpty(intent.TrackName)
+                            ? "音乐文件夹里还没有歌曲。"
+                            : $"没有找到{intent.TrackName}。");
+                    }
+                    break;
+
+                case MusicCommand.Resume:
+                    llm?.Interrupt();
+                    if (!music.Play()) Speak("没有可以播放的音乐。");
+                    break;
+
+                case MusicCommand.Pause:
+                    music.Pause();
+                    break;
+
+                case MusicCommand.Stop:
+                    music.Stop();
+                    break;
+
+                case MusicCommand.Next:
+                    llm?.Interrupt();
+                    if (!music.Next()) Speak("没有下一首了。");
+                    break;
+
+                case MusicCommand.Previous:
+                    llm?.Interrupt();
+                    if (!music.Previous()) Speak("没有上一首了。");
+                    break;
+
+                case MusicCommand.VolumeUp:
+                    music.SetVolume(music.GetVolume() + 0.2f);
+                    break;
+
+                case MusicCommand.VolumeDown:
+                    music.SetVolume(music.GetVolume() - 0.2f);
+                    break;
+
+                case MusicCommand.List:
+                    var names = music.GetTrackNames();
+                    if (names.Count == 0)
+                    {
+                        Speak("音乐文件夹里还没有歌曲。");
+                    }
+                    else
+                    {
+                        // 只念前 5 首，念一长串没人听得下去
+                        var head = names.Take(5).ToList();
+                        string listText = string.Join("、", head);
+                        Speak(names.Count > head.Count
+                            ? $"一共{names.Count}首，比如{listText}。"
+                            : $"有这些歌：{listText}。");
+                    }
+                    break;
+            }
+
+            NotifyMusicState(intent.Command);
+            return true;
+        }
+
+        /// <summary>让设备用 TTS 说一句话（音乐会自动让位）</summary>
+        private void Speak(string text)
+        {
+            tts?.Enqueue(text, 1f, 0);
+        }
+
+        private void NotifyMusicState(MusicCommand cmd)
+        {
+            var conn = client;
+            if (conn == null || !conn.IsAvailable) return;
+
+            string info = $"{music.State}|{music.CurrentName}|{music.GetVolume():0.00}";
+            try
+            {
+                conn.Send(JsonConvert.SerializeObject(new BaseMsg(3, info)));
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine("[音乐] 状态回执发送失败: " + e.Message);
             }
         }
 
@@ -189,7 +312,8 @@ namespace Server
                 }
                 Console.WriteLine("[" + connection.ConnectionInfo.ClientIpAddress + "下线了]");
                 client = null;
-                tts.UpdateClient(null);
+                music.Stop();
+                streamer.UpdateClient(null);
                 asr.UpdateClient(null);
                 asr.ResetBuffer();
                 timer.Enabled = false;
@@ -213,8 +337,13 @@ namespace Server
             }
             asr?.Stop();
             tts?.Stop();
+            music?.Shutdown();
+            streamer?.Stop();
             webSocketServer?.Dispose();
             webSocketServer = null;
         }
+
+        // ===== 供控制台调试使用（Program.cs 里的手输指令）=====
+        public MusicPlayer Music => music;
     }
 }
