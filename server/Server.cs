@@ -26,6 +26,7 @@ namespace Server
         Llm llm = null;
         PcmStreamer streamer = null;
         MusicPlayer music = null;
+        WeatherService weather = null;
         IWebSocketConnection client;
         readonly object clientLock = new object();
 
@@ -45,14 +46,27 @@ namespace Server
             tts = new TtsMatchaIcefall(streamer);
             music = new MusicPlayer(streamer);
 
+            // 心知天气 API —— key 从环境变量读，方便不同部署用不同 key
+            // 没有 key 的话天气功能不可用，但其它功能照常
+            string weatherKey = "kqkq4ekhns5gjt3s";
+            if (!string.IsNullOrEmpty(weatherKey))
+            {
+                weather = new WeatherService(weatherKey);
+                Console.WriteLine("[天气] 已启用");
+            }
+            else
+            {
+                Console.WriteLine("[天气] 未配置 SENIVERSE_KEY 环境变量，天气功能不可用");
+            }
+
             llm.tts = tts;
             asr.llm = llm;
 
             // 语音开口前让音乐让位；语音说完 PcmStreamer 触发 OnIdle，音乐自己接回
             tts.OnSpeechStarting = () => music.DuckForSpeech();
 
-            // ASR 结果先过音乐指令解析，命中就不打扰 LLM
-            asr.CommandInterceptor = HandleMusicCommand;
+            // ASR 结果先过指令解析（天气 + 音乐），命中就不打扰 LLM
+            asr.CommandInterceptor = HandleCommand;
 
             Console.WriteLine("tts llm asr music ok");
 
@@ -197,6 +211,11 @@ namespace Server
                     HandleMusicCommand(baseMsg.msg);
                     break;
 
+                case 4:
+                    // 天气查询：msg 为城市名或自然语言
+                    HandleWeatherCommand(baseMsg.msg);
+                    break;
+
                 default:
                     Console.WriteLine($"[WS] 未知 code={baseMsg.code}");
                     break;
@@ -280,6 +299,40 @@ namespace Server
             return true;
         }
 
+        /// <summary>
+        /// 处理天气指令。返回 true 表示已消费。
+        /// </summary>
+        private bool HandleWeatherCommand(string text)
+        {
+            if (weather == null) return false;
+            var intent = WeatherCommandParser.Parse(text);
+            if (!intent.IsWeatherQuery) return false;
+
+            // 天气查询是异步的，在后台线程执行，不阻塞 ASR 回调
+            Task.Run(async () =>
+            {
+                WeatherResult result;
+                if (intent.IsForecast)
+                    result = await weather.GetForecastAsync(intent.City, intent.ForecastDay);
+                else
+                    result = await weather.GetCurrentAsync(intent.City);
+
+                Speak(result.ToSpeech());
+            });
+
+            return true;
+        }
+
+        /// <summary>
+        /// 统一指令拦截：先天气、再音乐，命中就不送 LLM。
+        /// </summary>
+        private bool HandleCommand(string text)
+        {
+            if (HandleWeatherCommand(text)) return true;
+            if (HandleMusicCommand(text)) return true;
+            return false;
+        }
+
         /// <summary>让设备用 TTS 说一句话（音乐会自动让位）</summary>
         private void Speak(string text)
         {
@@ -345,5 +398,7 @@ namespace Server
 
         // ===== 供控制台调试使用（Program.cs 里的手输指令）=====
         public MusicPlayer Music => music;
+        public WeatherService Weather => weather;
     }
 }
+

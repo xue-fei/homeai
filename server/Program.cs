@@ -17,9 +17,10 @@
 
             Console.WriteLine("服务已启动，按 Ctrl+C 退出");
             Console.WriteLine("音乐调试指令：play [曲名] / pause / resume / stop / next / prev / vol 0.6 / list / scan");
+            Console.WriteLine("天气调试指令：weather [城市] / forecast [城市] [天数]");
 
             // 控制台指令线程：不接设备也能测音乐链路，省得每次都拿板子试
-            var cmdThread = new Thread(() => ConsoleLoop(server, exitEvent))
+            var cmdThread = new Thread(() => ConsoleLoop(server, exitEvent).GetAwaiter().GetResult())
             {
                 IsBackground = true,
                 Name = "Console"
@@ -33,7 +34,7 @@
             Console.WriteLine("已退出");
         }
 
-        static void ConsoleLoop(Server server, ManualResetEventSlim exitEvent)
+        static async Task ConsoleLoop(Server server, ManualResetEventSlim exitEvent)
         {
             while (!exitEvent.IsSet)
             {
@@ -98,15 +99,34 @@
                     case "state":
                         Console.WriteLine($"{music.State}  {music.CurrentName}  vol={music.GetVolume():0.00}");
                         break;
+                    case "weather":
+                        await WeatherCmd(server.Weather, arg, false);
+                        break;
+                    case "forecast":
+                        await WeatherCmd(server.Weather, arg, true);
+                        break;
                     case "quit":
                     case "exit":
                         exitEvent.Set();
                         return;
                     default:
-                        Console.WriteLine("未知指令。可用：play/pause/resume/stop/next/prev/vol/loop/list/scan/state/quit");
+                        Console.WriteLine("未知指令。可用：play/pause/resume/stop/next/prev/vol/loop/list/scan/state/weather/forecast/quit");
                         break;
                 }
             }
+        }
+
+        static async Task WeatherCmd(WeatherService weather, string arg, bool forecast)
+        {
+            if (weather == null)
+            {
+                Console.WriteLine("天气未配置（缺少 SENIVERSE_KEY 环境变量）");
+                return;
+            }
+            WeatherResult r = forecast
+                ? await weather.GetForecastAsync(arg)
+                : await weather.GetCurrentAsync(arg);
+            Console.WriteLine(r.ToSpeech());
         }
     }
 }
