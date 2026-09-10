@@ -139,6 +139,10 @@ void setup() {
   Serial.print("[WiFi] 已连接 IP=");
   Serial.println(WiFi.localIP());
 
+  // 拉满发射功率（ESP32-S3 最大 20.5dBm），弱信号下降低重传率
+  WiFi.setTxPower(WIFI_POWER_19_5dBm);
+  Serial.printf("[WiFi] 发射功率已提升，RSSI=%d dBm\n", WiFi.RSSI());
+
   // ---------- I2S 输入（麦克风）----------
   i2s_config_t i2s_config_in = {
     .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX),
@@ -217,6 +221,13 @@ void loop() {
     }
   }
 
+  // ---------- 是否有实时性工作可做 ----------
+  // 录音期间（pressed）必须紧贴麦克风 DMA，不能睡。
+  // 其余情况（空闲或播放）都让出 CPU。播放是输出 DMA 时钟驱动的，
+  // 数据早已由 webSocket.loop() 收进抖动缓冲，pumpPlayback 只是往 DMA 里搬，
+  // DMA 满了 i2s_write 会立刻返回，不需要 CPU 高频空转去抢。
+  bool hasWork = pressed;
+
   // ---------- 按钮去抖 ----------
   bool reading = (digitalRead(PIN_BUTTON) == LOW);
   if (reading != lastReading) {
@@ -238,6 +249,14 @@ void loop() {
 
   // ---------- 下行：抖动缓冲 -> I2S（DMA 背压驱动，非阻塞）----------
   pumpPlayback();
+
+  // ---------- 空转降频 ----------
+  // 空闲或播放时都睡 1ms，让 CPU 休息（治发热）。
+  // 1ms 远小于 20ms 一帧的播放节拍，睡醒后 pumpPlayback 依然能把 DMA 灌满；
+  // 录音期间（hasWork=true）不睡，紧贴麦克风时钟。
+  if (!hasWork) {
+    delay(1);
+  }
 
   // ---------- 堆水位诊断 ----------
   if (now - lastHeapReport >= heapReportInterval) {

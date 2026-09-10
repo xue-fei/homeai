@@ -28,15 +28,16 @@ namespace Server
         public const int FrameSamples = 320;                      // 20ms
         public const int FrameBytes = FrameSamples * 2;            // 640
 
-        // 每包聚合 3 帧 = 60ms。20ms 小包在 TCP 上易被 Nagle 聚合成不规律突发，
-        // 聚合后包数降到 1/3，抖动明显下降。
-        private const int FramesPerPacket = 3;
+        // 每包聚合 6 帧 = 120ms。弱信号 WiFi 下，包越大越稀疏，CSMA/CA 退避与
+        // TCP 重传的开销摊薄，抖动和发热都更低。120ms 是"抗抖动"与"端到端延迟"
+        // 的折中：再大首字延迟会变明显，再小则包过密。
+        private const int FramesPerPacket = 6;
 
         // 队列上限 8 秒。满了阻塞生产者（反压），绝不丢帧 —— 丢帧就是跳音。
         private const int MaxQueueFrames = 400;
 
-        // 起播水位 400ms，用于吸收生产端抖动
-        private const int StartWatermarkFrames = 20;
+        // 起播水位 480ms（= FramesPerPacket * 4），用于吸收生产端抖动和 WiFi 首包延迟。
+        private const int StartWatermarkFrames = 24;
 
         private readonly ConcurrentQueue<byte[]> queue = new();
         private volatile IWebSocketConnection client = null;
