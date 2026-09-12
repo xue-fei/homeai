@@ -24,7 +24,7 @@ namespace Server
         Keyword keyword;
         VoiceActivityDetector vad;
 
-        public Llm llm = null;
+        public ILlm llm = null;
 
         /// <summary>
         /// 识别结果拦截钩子。返回 true 表示该文本已被处理（例如音乐指令），不再送给 LLM。

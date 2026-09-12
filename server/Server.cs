@@ -23,7 +23,7 @@ namespace Server
         WebSocketServer webSocketServer = null;
         Asr asr = null;
         TtsMatchaIcefall tts = null;
-        Llm llm = null;
+        ILlm llm = null;
         PcmStreamer streamer = null;
         MusicPlayer music = null;
         WeatherService weather = null;
@@ -41,7 +41,20 @@ namespace Server
             streamer = new PcmStreamer();
 
             asr = new Asr();
-            llm = new Llm();
+
+            // LLM 后端：优先 LongCat 云端（key 从环境变量 LONGCAT_KEY 读），
+            // 没配 key 则回退到本地 Ollama。
+            string longCatKey = Environment.GetEnvironmentVariable("LONGCAT_KEY");
+            if (!string.IsNullOrEmpty(longCatKey))
+            {
+                llm = new LlmLongCat(longCatKey, sysTip: "你是一个中文语音助手，回答要口语化、简洁，适合朗读。");
+                Console.WriteLine("[LLM] 使用 LongCat 云端大模型");
+            }
+            else
+            {
+                llm = new Llm();
+                Console.WriteLine("[LLM] 未配置 LONGCAT_KEY，使用本地 Ollama");
+            }
 
             tts = new TtsMatchaIcefall(streamer);
             music = new MusicPlayer(streamer);
@@ -293,6 +306,11 @@ namespace Server
                             : $"有这些歌：{listText}。");
                     }
                     break;
+
+                case MusicCommand.Loop:
+                    music.SetLoopMode(intent.Loop);
+                    Speak(LoopModeText(intent.Loop));
+                    break;
             }
 
             NotifyMusicState(intent.Command);
@@ -338,6 +356,14 @@ namespace Server
         {
             tts?.Enqueue(text, 1f, 0);
         }
+
+        private static string LoopModeText(LoopMode m) => m switch
+        {
+            LoopMode.Sequential => "已切换为顺序播放。",
+            LoopMode.LoopAll => "已切换为列表循环。",
+            LoopMode.LoopOne => "已切换为单曲循环。",
+            _ => string.Empty
+        };
 
         private void NotifyMusicState(MusicCommand cmd)
         {

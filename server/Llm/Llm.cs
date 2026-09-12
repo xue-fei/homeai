@@ -7,9 +7,9 @@ using Server.Tts;
 
 namespace Server
 {
-    public class Llm
+    public class Llm : ILlm
     {
-        public TtsMatchaIcefall tts;
+        public TtsMatchaIcefall tts { get; set; }
         OllamaApiClient ollama;
         List<Message> chatHistory;
         string modelName;

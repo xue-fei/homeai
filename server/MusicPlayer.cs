@@ -9,6 +9,17 @@
         Ducked
     }
 
+    /// <summary>循环模式（三态，与主流播放器一致）</summary>
+    public enum LoopMode
+    {
+        /// <summary>顺序播放：播完列表就停</summary>
+        Sequential,
+        /// <summary>列表循环：播完最后一首回到第一首</summary>
+        LoopAll,
+        /// <summary>单曲循环：一直重复当前这首</summary>
+        LoopOne
+    }
+
     /// <summary>
     /// 背景音乐播放器
     ///
@@ -35,7 +46,7 @@
         private int index = -1;
         private WavStreamReader reader = null;
         private volatile MusicState state = MusicState.Stopped;
-        private volatile bool loopAll = true;
+        private LoopMode loopMode = LoopMode.LoopAll;
         private float volume = 0.6f;                 // 背景音乐默认压低一点
 
         private volatile int myGen = -1;
@@ -221,11 +232,32 @@
 
         public float GetVolume() => volume;
 
-        public void SetLoopAll(bool on)
+        public void SetLoopMode(LoopMode mode)
         {
-            loopAll = on;
-            Console.WriteLine($"[音乐] 列表循环 {(on ? "开" : "关")}");
+            loopMode = mode;
+            Console.WriteLine($"[音乐] 循环模式 {LoopModeText(mode)}");
         }
+
+        /// <summary>兼容旧调用：true=列表循环，false=顺序播放</summary>
+        public void SetLoopAll(bool on) => SetLoopMode(on ? LoopMode.LoopAll : LoopMode.Sequential);
+
+        public LoopMode GetLoopMode() => loopMode;
+
+        /// <summary>循环到下一个模式（顺序 → 列表循环 → 单曲循环 → 顺序）。控制台/语音切循环用。</summary>
+        public LoopMode CycleLoopMode()
+        {
+            loopMode = (LoopMode)(((int)loopMode + 1) % 3);
+            Console.WriteLine($"[音乐] 循环模式 {LoopModeText(loopMode)}");
+            return loopMode;
+        }
+
+        private static string LoopModeText(LoopMode m) => m switch
+        {
+            LoopMode.Sequential => "顺序播放",
+            LoopMode.LoopAll => "列表循环",
+            LoopMode.LoopOne => "单曲循环",
+            _ => "未知"
+        };
 
         /// <summary>
         /// 语音即将开始：把音乐降级为 Ducked。
@@ -436,15 +468,41 @@
                 reader?.Dispose();
                 reader = null;
 
-                if (!loopAll || playlist.Count == 0)
+                if (playlist.Count == 0)
                 {
                     state = MusicState.Stopped;
                     myGen = -1;
                     return;
                 }
 
-                int next = (index + 1) % playlist.Count;
-                // 单曲列表时 next == index，同样重新打开即可（循环播放）
+                int next;
+                switch (loopMode)
+                {
+                    case LoopMode.LoopOne:
+                        // 单曲循环：重播当前这首
+                        next = index < 0 ? 0 : index;
+                        break;
+
+                    case LoopMode.LoopAll:
+                        // 列表循环：到最后一首回到第一首
+                        next = (index + 1) % playlist.Count;
+                        break;
+
+                    case LoopMode.Sequential:
+                    default:
+                        // 顺序播放：播到最后一首就停
+                        if (index + 1 >= playlist.Count)
+                        {
+                            state = MusicState.Stopped;
+                            myGen = -1;
+                            Console.WriteLine("[音乐] 列表播完（顺序模式）");
+                            return;
+                        }
+                        next = index + 1;
+                        break;
+                }
+
+                // 单曲列表时 LoopAll 的 next == index，同样重新打开即可
                 if (!OpenAndStartInternalNoRelease(next))
                 {
                     state = MusicState.Stopped;

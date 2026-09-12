@@ -16,7 +16,7 @@
             AppDomain.CurrentDomain.ProcessExit += (s, e) => exitEvent.Set();
 
             Console.WriteLine("服务已启动，按 Ctrl+C 退出");
-            Console.WriteLine("音乐调试指令：play [曲名] / pause / resume / stop / next / prev / vol 0.6 / list / scan");
+            Console.WriteLine("音乐调试指令：play [曲名] / pause / resume / stop / next / prev / vol 0.6 / list / scan / loop [one|all|off]");
             Console.WriteLine("天气调试指令：weather [城市] / forecast [城市] [天数]");
 
             // 控制台指令线程：不接设备也能测音乐链路，省得每次都拿板子试
@@ -77,7 +77,29 @@
                         else Console.WriteLine($"当前音量 {music.GetVolume():0.00}");
                         break;
                     case "loop":
-                        music.SetLoopAll(arg != "off" && arg != "0");
+                        // loop / loop one / loop all / loop off
+                        switch (arg.ToLowerInvariant())
+                        {
+                            case "one":
+                            case "1":
+                                music.SetLoopMode(LoopMode.LoopOne);
+                                break;
+                            case "all":
+                            case "":
+                                music.SetLoopMode(LoopMode.LoopAll);
+                                break;
+                            case "off":
+                            case "0":
+                            case "seq":
+                                music.SetLoopMode(LoopMode.Sequential);
+                                break;
+                            default:
+                                Console.WriteLine("用法：loop [one|all|off]（无参数则循环切换模式）");
+                                break;
+                        }
+                        break;
+                    case "cycle":
+                        music.CycleLoopMode();
                         break;
                     case "scan":
                         music.RefreshPlaylist();
@@ -97,7 +119,7 @@
                         }
                         break;
                     case "state":
-                        Console.WriteLine($"{music.State}  {music.CurrentName}  vol={music.GetVolume():0.00}");
+                        Console.WriteLine($"{music.State}  {music.CurrentName}  vol={music.GetVolume():0.00}  循环={music.GetLoopMode()}");
                         break;
                     case "weather":
                         await WeatherCmd(server.Weather, arg, false);
@@ -110,7 +132,7 @@
                         exitEvent.Set();
                         return;
                     default:
-                        Console.WriteLine("未知指令。可用：play/pause/resume/stop/next/prev/vol/loop/list/scan/state/weather/forecast/quit");
+                        Console.WriteLine("未知指令。可用：play/pause/resume/stop/next/prev/vol/loop/cycle/list/scan/state/weather/forecast/quit");
                         break;
                 }
             }

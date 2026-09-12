@@ -11,7 +11,8 @@
         Previous,
         VolumeUp,
         VolumeDown,
-        List
+        List,
+        Loop
     }
 
     public class MusicIntent
@@ -19,6 +20,8 @@
         public MusicCommand Command = MusicCommand.None;
         /// <summary>「播放<曲名>」里解析出的曲名，可能为空</summary>
         public string TrackName = string.Empty;
+        /// <summary>循环指令对应的目标模式（仅 Command==Loop 时有效）</summary>
+        public LoopMode Loop = LoopMode.LoopAll;
     }
 
     /// <summary>
@@ -60,6 +63,16 @@
         private static readonly string[] ListWords =
             { "有什么歌", "有哪些歌", "歌单", "有什么音乐", "有哪些音乐", "播放列表" };
 
+        // 循环类：单曲循环 / 列表循环 / 顺序播放 / 切换循环模式
+        private static readonly string[] LoopOneWords =
+            { "单曲循环", "循环这一首", "循环这首", "重复这一首", "重复这首" };
+
+        private static readonly string[] LoopAllWords =
+            { "列表循环", "循环播放", "循环放", "顺序循环", "循环" };
+
+        private static readonly string[] LoopOffWords =
+            { "顺序播放", "不循环", "关闭循环", "关掉循环" };
+
         // 「播放XXX」类前缀，按长度降序匹配以便优先吃掉更具体的说法
         private static readonly string[] PlayPrefixes =
             { "播放音乐", "放音乐", "播放歌曲", "来首歌", "来点音乐", "听音乐", "听歌", "播放", "放一首", "放首", "我想听", "想听" };
@@ -80,6 +93,11 @@
             if (MatchAny(t, VolumeUpWords)) { intent.Command = MusicCommand.VolumeUp; return intent; }
             if (MatchAny(t, VolumeDownWords)) { intent.Command = MusicCommand.VolumeDown; return intent; }
             if (MatchAny(t, PauseWords)) { intent.Command = MusicCommand.Pause; return intent; }
+
+            // 循环类（要先于 Play 前缀判断，否则「循环播放」会被「播放」抢先）
+            if (MatchAny(t, LoopOneWords)) { intent.Command = MusicCommand.Loop; intent.Loop = LoopMode.LoopOne; return intent; }
+            if (MatchAny(t, LoopOffWords)) { intent.Command = MusicCommand.Loop; intent.Loop = LoopMode.Sequential; return intent; }
+            if (MatchAny(t, LoopAllWords)) { intent.Command = MusicCommand.Loop; intent.Loop = LoopMode.LoopAll; return intent; }
 
             foreach (var prefix in PlayPrefixes)
             {
