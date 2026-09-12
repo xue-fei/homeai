@@ -36,8 +36,32 @@ namespace Server
         // 队列上限 8 秒。满了阻塞生产者（反压），绝不丢帧 —— 丢帧就是跳音。
         private const int MaxQueueFrames = 400;
 
-        // 起播水位 480ms（= FramesPerPacket * 4），用于吸收生产端抖动和 WiFi 首包延迟。
-        private const int StartWatermarkFrames = 24;
+        // 发送超前上限：服务端最多比"实时播放时钟"领先多少帧就暂停发送。
+        // 这是关键限速器：TTS 推理是 20~40 倍实时，一推理完就有一大坨帧在队列里，
+        // 如果不按实时节拍限速，会把这一大坨一口气全灌给 ESP32，其 64 帧(1.28s)
+        // 抖动缓冲瞬间灌满 -> 之后每来一帧丢一帧（dropFrames 暴涨）= 丢掉的都是
+        // 已合成好的语音 -> 听感跳字漏词。
+        //
+        // 定成 32 帧(640ms)：既给 ESP32 冷启动预缓冲(10帧) + DMA(12帧) 留足余量、
+        // 保证不欠载，又离 ESP32 缓冲上限 64 帧有安全距离，稳态下绝不触发丢帧。
+        // 注意稳态下这个上限其实用不到 —— 发送速率被实时时钟钳制在 50 帧/秒，
+        // 超前量只会小幅波动，不会真积累到 32 帧。它只兜住"线程被卡住后突然恢复
+        // 疯狂追帧"这种异常场景。
+        private const int SendAheadLimitFrames = 32;
+
+        // 起播水位：攒够多少帧才开声。
+        // 关键认知：防爆音的预缓冲职责在 ESP32 侧（它冷启动攒 200ms 才开声），
+        // 服务端不需要再攒帧。服务端攒帧只会让首字延迟变大，且在"短句 + 突发供给"
+        // 场景下（TTS 一次只吐几帧然后又空几秒）永远凑不满水位 -> 一个字节都不发
+        // -> ESP32 缓冲被抽干 -> 欠载暴涨。所以这里定成 1：有数据立刻发。
+        private const int StartWatermarkFrames = 1;
+
+        // 耐心机制：生产者停止供数据后，等待多久才真正收尾。
+        // LLM 是逐句生成的，句与句之间有几秒钟的思考时间。如果 PcmStreamer 一看到
+        // isProducing=false 就急着收尾，ESP32 每次都要重新预缓冲，听感就是一顿一顿的。
+        // 2 秒耐心值 > LLM 典型的句间停顿（< 1s），但 < ESP32 缓冲耗尽时间（1.28s +
+        // 起播水位），所以不会无限等下去。
+        private const int PatienceMs = 2000;
 
         private readonly ConcurrentQueue<byte[]> queue = new();
         private volatile IWebSocketConnection client = null;
@@ -62,6 +86,10 @@ namespace Server
 
         /// <summary>队列彻底空闲（无 owner 在生产）时触发一次。音乐用它做自动恢复。</summary>
         public event Action OnIdle;
+
+        // 时间戳：最后一帧入队时间（用于耐心机制）、上次发送时间（用于最小间隔）
+        private DateTime lastFrameTime = DateTime.MinValue;
+        private DateTime lastSendTime = DateTime.MinValue;
 
         public PcmStreamer()
         {
@@ -151,15 +179,17 @@ namespace Server
 
             if (gen != generation) return false;
             queue.Enqueue(frame);
+            lastFrameTime = DateTime.UtcNow;   // 记录入队时间，用于耐心机制
             return true;
         }
 
         private void SendLoop()
         {
             var sw = Stopwatch.StartNew();
-            double framesDue = 0;                                  // 已计入时钟的帧数
+            double framesDue = 0;
             double framesPerMs = TargetSampleRate / 1000.0 / FrameSamples;   // 0.05 帧/ms
             byte[] packet = new byte[FrameBytes * FramesPerPacket];
+            var diagSw = Stopwatch.StartNew();
 
             while (running)
             {
@@ -174,6 +204,8 @@ namespace Server
                         started = true;
                         sw.Restart();
                         framesDue = 0;
+                        lastFrameTime = DateTime.UtcNow;
+                        lastSendTime = DateTime.UtcNow;
                     }
                     else
                     {
@@ -190,64 +222,65 @@ namespace Server
                     }
                 }
 
-                // ---- 到点了吗 ----
-                double due = sw.Elapsed.TotalMilliseconds * framesPerMs;
-                if (due - framesDue < FramesPerPacket)
+                if (queue.Count == 0)
                 {
+                    // 队列空了：检查耐心值
+                    bool producerDone = isProducing == null || !isProducing();
+                    int emptyMs = (int)(DateTime.UtcNow - lastFrameTime).TotalMilliseconds;
+
+                    // 生产者说完了，或者耐心耗尽了 -> 收尾
+                    if (producerDone || emptyMs > PatienceMs)
+                    {
+                        started = false;
+                        if (!drainNotified)
+                        {
+                            drainNotified = true;
+                            var cb = onDrained;
+                            onDrained = null;
+                            try { cb?.Invoke(); } catch (Exception e) { Console.WriteLine("[PCM] drained 回调异常: " + e.Message); }
+                            try { OnIdle?.Invoke(); } catch (Exception e) { Console.WriteLine("[PCM] idle 回调异常: " + e.Message); }
+                        }
+                        continue;
+                    }
+
+                    // 还有耐心，继续等
                     Thread.Sleep(2);
                     continue;
                 }
 
-                if (queue.Count < FramesPerPacket)
+                // ---- 按实时节拍发送，绝不超前冲爆 ESP32 缓冲 ----
+                // framesDue 累加的是「已经发出的帧数」，sw.Elapsed 对应「实时已流逝
+                // 时间应发的帧数」。发送超前量 = framesDue - due，是正数表示
+                // 已经比实时多发了 N 帧。只要超前量超过上限就暂停，等实时时钟追上。
+                // 这样发送速率严格贴合 50 帧/秒，有数据立刻发（不欠载），
+                // 又不超前太多（不冲爆 ESP32 缓冲丢帧）。
+                double due = sw.Elapsed.TotalMilliseconds * framesPerMs;
+                if (framesDue - due > SendAheadLimitFrames)
                 {
-                    // 欠载：还有数据在路上就等（不退出 started，避免重复预缓冲）
-                    if (isProducing != null && isProducing())
-                    {
-                        Thread.Sleep(2);
-                        continue;
-                    }
-
-                    // 确实结束了：把零散尾帧发完再收尾
-                    int tail = 0;
-                    while (tail < FramesPerPacket && queue.TryDequeue(out byte[] tf))
-                    {
-                        Buffer.BlockCopy(tf, 0, packet, tail * FrameBytes, FrameBytes);
-                        tail++;
-                    }
-                    if (tail > 0)
-                    {
-                        SendPacket(packet, tail * FrameBytes);
-                        Interlocked.Add(ref sentFrames, tail);
-                        framesDue += tail;
-                    }
-
-                    started = false;
-                    if (!drainNotified)
-                    {
-                        drainNotified = true;
-                        var cb = onDrained;
-                        onDrained = null;
-                        try { cb?.Invoke(); } catch (Exception e) { Console.WriteLine("[PCM] drained 回调异常: " + e.Message); }
-                        try { OnIdle?.Invoke(); } catch (Exception e) { Console.WriteLine("[PCM] idle 回调异常: " + e.Message); }
-                    }
+                    // 已比实时领先 32 帧(640ms)，暂停等 ESP32 消费追上
+                    Thread.Sleep(2);
                     continue;
                 }
 
                 int filled = 0;
-                while (filled < FramesPerPacket && queue.TryDequeue(out byte[] f))
+                int maxFrames = Math.Min(FramesPerPacket, queue.Count);
+                while (filled < maxFrames && queue.TryDequeue(out byte[] f))
                 {
                     Buffer.BlockCopy(f, 0, packet, filled * FrameBytes, FrameBytes);
                     filled++;
                 }
+                if (filled == 0) { Thread.Sleep(2); continue; }
+
                 SendPacket(packet, filled * FrameBytes);
                 Interlocked.Add(ref sentFrames, filled);
                 framesDue += filled;
 
-                // 落后太多（进程被挂起等）重置时钟，避免疯狂追帧把 ESP32 缓冲冲爆
-                if (due - framesDue > 25)
+                // 周期诊断：队列水位 + 生产状态，用于定位"供给不足"还是"发送卡住"
+                if (diagSw.ElapsedMilliseconds >= 5000)
                 {
-                    sw.Restart();
-                    framesDue = 0;
+                    diagSw.Restart();
+                    bool prod = isProducing != null && isProducing();
+                    Console.WriteLine($"[PCM] 队列={queue.Count} 已发={SentFrames} 生产中={prod} started={started}");
                 }
             }
         }

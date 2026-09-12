@@ -49,6 +49,14 @@ namespace Server.Tts
 
         // 出口代号（从 PcmStreamer.Acquire 拿到）
         private volatile int outGen = -1;
+        /// <summary>最近一次有音频输出的时间戳，用于让 producing 回调在句间暂停期内保持 true</summary>
+        private DateTime lastOutputTime = DateTime.MinValue;
+
+        // 合成结束后多久内，producing 回调仍然返回 true。
+        // LLM 是逐句生成的，句间有几秒钟的思考时间。如果 TTS 一合成完就报告"结束"，
+        // PcmStreamer 会立刻触发收尾，ESP32 每次都要重新预缓冲。
+        // 这个值要大于 LLM 典型的句间停顿（< 1s），但小于 ESP32 缓冲耗尽时间。
+        private const int KeepAliveMs = 2500;
 
         // 不足一帧的 PCM 残留
         private readonly List<byte> pcmFrameBuffer = new List<byte>();
@@ -170,8 +178,15 @@ namespace Server.Tts
                     try { OnSpeechStarting?.Invoke(); }
                     catch (Exception e) { Console.WriteLine("[TTS] 让位回调异常: " + e.Message); }
 
+                    lastOutputTime = DateTime.UtcNow;   // 从抢占出口开始就计入 KeepAlive，覆盖 LLM 冷启动期
                     outGen = streamer.Acquire(
-                        producing: () => isGenerating || !textQueue.IsEmpty,
+                        producing: () =>
+                        {
+                            // 正在合成，或者合成刚结束不久（LLM 正在想下一句），都算"还在生产"
+                            if (isGenerating || !textQueue.IsEmpty) return true;
+                            int sinceLastOut = (int)(DateTime.UtcNow - lastOutputTime).TotalMilliseconds;
+                            return sinceLastOut < KeepAliveMs;
+                        },
                         drained: () =>
                         {
                             outGen = -1;
@@ -278,7 +293,10 @@ namespace Server.Tts
             if (myGen != generation) return;
             int g = outGen;
             if (g < 0) return;
-            streamer.Push(frame, g);
+            if (streamer.Push(frame, g))
+            {
+                lastOutputTime = DateTime.UtcNow;   // 记录实际有输出的时间
+            }
         }
 
         public void Stop()
